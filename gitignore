@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+outputs/transcripts/*.json
+outputs/evaluations/*.json
+outputs/report_cards/*.txt
