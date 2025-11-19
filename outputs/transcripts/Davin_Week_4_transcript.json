@@ -1,0 +1,42 @@
+{
+  "student_name": "Davin",
+  "assignment": "Week 4",
+  "image_path": "Davin - week 4.jpg, Davin week 4a.jpg",
+  "transcription": "In this extract, Lowry uses a third - person limited point of view to enable the readers to experience how Jonas felt and make his third ride. This was significant when they experienced the memories, which reveals how Jonas felt and made his story. It also makes it more entertaining and understand what Jonas is feeling.\n\nOverall, the use of third person limited helps the reader connect at what Jonas is feeling. This was shown when they were talking about the memories and we really knew what Jonas felt in the sled ride.\n\nI don't know how to do the third part.",
+  "word_count": 94,
+  "handwriting_quality": "moderate",
+  "strikethroughs_present": true,
+  "uncertainties": [
+    {
+      "line_number": 3,
+      "context": "how Jonas felt and make his",
+      "unclear_word": "third",
+      "alternatives": [
+        "third",
+        "sled"
+      ],
+      "confidence": "medium",
+      "reason": "word appears cramped and unclear"
+    },
+    {
+      "line_number": 3,
+      "context": "make his third",
+      "unclear_word": "ride",
+      "alternatives": [
+        "ride",
+        "side"
+      ],
+      "confidence": "medium",
+      "reason": "last letter unclear"
+    }
+  ],
+  "accuracy_score": 0.8122499999999999,
+  "requires_review": true,
+  "notes": [
+    "Line 3: Text appears squeezed in: 'uses a third - person'",
+    "Line 5: Word crossed out after 'how' - appears to be 'Jonas'",
+    "Line 6: Text appears to continue across lines with 'felt and made his'",
+    "Line 8: 'entertaining and understand' - missing word 'to' between them likely",
+    "Line 3: 'the' is crossed out before 'Jonas'"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "student_name": "Desmond",
+  "assignment": "Week 4",
+  "image_path": "Desmond - week 4.jpg, Desmond - week 4a.jpg",
+  "transcription": "HOMEWORK\n\nIn chapter 11 of The Grier, Lowry allows readers to experience the sensations that Jonas was feeling as if the readers were the ones receiving the memory themselves. The author creates this feeling by using Third Person Limited as she shifts between Jonas's external feelings and his internal thoughts. Furthermore, by making readers experience what Jonas experiences it surprise readers because of the withdrawn information, which changes with the readers and works them in. Moreover, because of the Third Person Limited also makes the reader question how The Giver feels and the memories which creates a mysterious feeling.\n\nIn The Giver, Lowry portrays Jonas as a reliable narrator making readers trust anything Jonas says or observes. In the part where Jonas experiences snow for the first time, the author writes about his experience accurately, making the readers believe that the memory transmission is real using \"dots of cold\" and \"bright, whirling torrent of crystals\" to signify snow and snowflakes, making the memory transmission look real and feel real. Furthermore, this device doesn't only make readers feel as if they could trust the narrator, but further makes readers awed by this power and makes them want to know more about it.",
+  "word_count": 205,
+  "handwriting_quality": "moderate",
+  "strikethroughs_present": true,
+  "uncertainties": [
+    {
+      "line_number": 6,
+      "context": "what Jonas experiences it",
+      "unclear_word": "surprise",
+      "alternatives": [
+        "surprise",
+        "surprises"
+      ],
+      "confidence": "medium",
+      "reason": "grammar inconsistency with verb form"
+    },
+    {
+      "line_number": 6,
+      "context": "accurately, making the readers",
+      "unclear_word": "making",
+      "alternatives": [
+        "making",
+        "making"
+      ],
+      "confidence": "high",
+      "reason": "word appears squeezed in above the line"
+    }
+  ],
+  "accuracy_score": 0.8122499999999999,
+  "requires_review": true,
+  "notes": [
+    "Line 4: crossed out 'from'",
+    "Line 9: crossed out 'suggested'",
+    "Line 12: crossed out 'limited'",
+    "Line 13: crossed out 'and the memory'",
+    "Bottom line appears incomplete: 'In this extract from The Griver, Lowry uses Third-Person Limited to show Jonas's feelings and thoughts, restricting the readers to only see and sense what Jonas did. The author emphasizes this by saying \"burst snow was dots of cold and snowflakes were \"bright, whirling funnels of crystals.\" This effect was created through the by making the readers experience and relying making the readers feel as one with Jonas.'",
+    "Line 4: crossed out 'Jonas' before 'the author'",
+    "Line 5: crossed out 'that' and replaced with 'the memory transmission is real'",
+    "Line 8: crossed out 'look' and replaced with 'real'",
+    "Line 9: crossed out 'functions' and replaced with 'awed'",
+    "Line 10: crossed out 'trying to sad' at the end"
+  ]
+}

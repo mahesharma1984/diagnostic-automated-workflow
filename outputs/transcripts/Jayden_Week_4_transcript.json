@@ -1,0 +1,41 @@
+{
+  "student_name": "Jayden",
+  "assignment": "Week 4",
+  "image_path": "Jayden Liyu - week 4 - homework.jpg",
+  "transcription": "Third Person Limited:\n\nThe effect of third person limited point of view is to focus clearly on Jonas' thoughts and feelings. This means the story is told through by a narrator who is outside the story but knows what Jonas feels and sees. The third person limited point of view helps readers see alongside Jonas. For example, when Jonas first began receiving memories from the old man, readers feel his confusion, pain and wonder as if they are experiencing that too. Lowry helps us connect and understand Jonas' world.\n\nForeshadowing:\n\nThe effect of foreshadowing is used in The Giver to show us deeper truths hidden beneath the seemingly perfect community. Examples such as Jonas' unusual eyes hints at his special role in the future. The communities word \"release\" without explanation hints at ominous events. A sense of something unusual or concerning disconnected with rules, prepares us for the special culture.",
+  "word_count": 141,
+  "handwriting_quality": "moderate",
+  "strikethroughs_present": false,
+  "uncertainties": [
+    {
+      "line_number": 4,
+      "context": "...story is told through by a narrator...",
+      "unclear_word": "through",
+      "alternatives": [
+        "through",
+        "thought"
+      ],
+      "confidence": "medium",
+      "reason": "word appears awkwardly positioned in sentence"
+    },
+    {
+      "line_number": 12,
+      "context": "...hints at ominous events...",
+      "unclear_word": "ominous",
+      "alternatives": [
+        "ominous",
+        "omnious"
+      ],
+      "confidence": "medium",
+      "reason": "handwriting slightly unclear on middle letters"
+    }
+  ],
+  "accuracy_score": 0.855,
+  "requires_review": true,
+  "notes": [
+    "Grammar error: 'told through by' - awkward phrasing",
+    "Missing apostrophe in 'Jonas' - should be 'Jonas's'",
+    "Word 'roll' appears to be correctly written as 'role'",
+    "Some run-on sentences present"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "student_name": "Coden",
+  "assignment": "Week 4",
+  "image_path": "Coden - week 4.jpg",
+  "transcription": "Week 4 Homework\n\nThird person point of view.\nIn Chapter 11, Lowry uses third person limited point of view to allow readers make the reader question how how the giver feels when from transmitting the no new memory since the descriptions are limited on Jonas. In He breathed again, feeling the sharp intake of frigid air.) In He could feel cold air swirling around his entire body.) All of of these description are limited on Jonas and none of them are about The Giver. This third person limited point of view therefore, leave a mystery about The Giver behind in this story.\n\nReliable narrator\nIn Chapter 11, Lowry uses reliable narrator to make the readers believe in the process of the transmission of memory instead instead of thinking Jonas is drunk and just making stuff up. Jonas had a lot of questions after experiencing the sled, why don't we have snow, sled and hills.) And when did we, In the past? And a bit more, normally people would will have a lot of questions after experiencing something new. Therefore, this reliable narrator makes the readers believe Jonas had experienced everything and feel more deep into the story.",
+  "word_count": 189,
+  "handwriting_quality": "moderate",
+  "strikethroughs_present": true,
+  "uncertainties": [
+    {
+      "line_number": 4,
+      "context": "to allow readers make the reader",
+      "unclear_word": "allow",
+      "alternatives": [
+        "allow",
+        "help"
+      ],
+      "confidence": "medium",
+      "reason": "slightly unclear handwriting"
+    }
+  ],
+  "accuracy_score": 0.8573749999999999,
+  "requires_review": true,
+  "notes": [
+    "Line 4: crossed out 'allow readers' and 'make'",
+    "Line 5: crossed out 'from' and 'no new'",
+    "Line 6: crossed out 'since' and 'In'",
+    "Line 8: crossed out 'In', replaced with parenthesis",
+    "Line 9: crossed out 'of' after 'All of'",
+    "Line 10: crossed out 'none'",
+    "Line 15: crossed out 'instead' (appears twice)",
+    "Line 17: crossed out 'sled' and comma placement",
+    "Line 19: crossed out 'would'",
+    "Line 21: crossed out several words at end of paragraph"
+  ]
+}

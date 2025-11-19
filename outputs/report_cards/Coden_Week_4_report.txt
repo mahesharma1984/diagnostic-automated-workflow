@@ -1,0 +1,24 @@
+======================================================================
+
+TVODE REPORT CARD
+======================================================================
+
+Student: Coden
+Assignment: Week 4
+Overall Score: 2.9/5 (57%)
+
+──────────────────────────────────────────────────────────────────────
+
+SM1 (Component Presence): 3.0/5
+  Current: You have Topic, Verb, Object, Detail, Effect components present. Your Details are vague.
+  Next step: Add specific textual moments with exact quotes or actions instead of general descriptions.
+
+SM2 (Density Performance): 3.0/5
+  Current: You make 5 analytical attempts across your writing.
+  Next step: Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point.
+
+SM3 (Cohesion Performance): 2.5/5
+  Current: You use 1 connectors and have approximately 3 grammar issues.
+  Next step: Focus on subject-verb agreement and use more connectors like 'therefore' and 'which' to link ideas.
+
+======================================================================

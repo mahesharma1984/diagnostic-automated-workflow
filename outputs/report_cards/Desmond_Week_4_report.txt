@@ -1,0 +1,25 @@
+======================================================================
+TVODE REPORT CARD
+======================================================================
+
+Student: Desmond
+Assignment: Week 4
+Overall Score: 3.7/5 (74%)
+
+──────────────────────────────────────────────────────────────────────
+
+SM1 (Component Presence): 4.0/5
+You have Topic, Verb, Object, Detail, Effect components present. Your Details are specific.
+
+SM2 (Density Performance): 3.5/5
+You make 3 analytical attempts across your writing.
+
+SM3 (Cohesion Performance): 3.5/5
+You use 2 connectors and have approximately 0 grammar issues.
+
+──────────────────────────────────────────────────────────────────────
+
+ONE-LINE FIX:
+Your specific details are good - now add more precise contextual information.
+
+======================================================================

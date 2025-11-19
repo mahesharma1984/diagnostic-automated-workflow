@@ -1,0 +1,49 @@
+{
+  "student": "Davin",
+  "assignment": "Week 4",
+  "scores": {
+    "sm1": 3.0,
+    "sm2": 3.0,
+    "sm3": 2.0,
+    "overall": 2.7,
+    "total_points": 13.5,
+    "ceiling": 3.0
+  },
+  "components": {
+    "topics": [
+      "point of view",
+      "Jonas",
+      "Overall,",
+      "Lowry",
+      "lowry"
+    ],
+    "verbs": [
+      "reveals",
+      "makes",
+      "uses"
+    ],
+    "objects": [
+      "felt",
+      "connect",
+      "limited",
+      "made",
+      "experience",
+      "jonas",
+      "entertaining",
+      "more",
+      "what",
+      "person"
+    ],
+    "detail_count": 2,
+    "effect_count": 5,
+    "detail_quality": "vague"
+  },
+  "feedback": {
+    "sm1": "You have Topic, Verb, Object, Detail, Effect components present. Your Details are vague.",
+    "sm1_next": "Add specific textual moments with exact quotes or actions instead of general descriptions.",
+    "sm2": "You make 3 analytical attempts across your writing.",
+    "sm2_next": "Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point.",
+    "sm3": "You use 0 connectors and have approximately 0 grammar issues.",
+    "sm3_next": "Focus on subject-verb agreement and use more connectors like 'therefore' and 'which' to link ideas."
+  }
+}

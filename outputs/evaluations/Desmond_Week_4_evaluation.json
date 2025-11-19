@@ -1,0 +1,53 @@
+{
+  "student": "Desmond",
+  "assignment": "Week 4",
+  "scores": {
+    "sm1": 4.0,
+    "sm2": 3.5,
+    "sm3": 3.5,
+    "overall": 3.7,
+    "total_points": 18.5,
+    "ceiling": 4.0
+  },
+  "components": {
+    "topics": [
+      "narrator",
+      "Limited",
+      "Jonas",
+      "Moreover,",
+      "Jonas's",
+      "Grier,",
+      "HOMEWORK",
+      "author",
+      "Furthermore,",
+      "Giver"
+    ],
+    "verbs": [
+      "creates",
+      "makes"
+    ],
+    "objects": [
+      "reader",
+      "believe",
+      "mysterious",
+      "third",
+      "real",
+      "readers",
+      "that",
+      "were",
+      "power",
+      "trust"
+    ],
+    "detail_count": 6,
+    "effect_count": 7,
+    "detail_quality": "specific"
+  },
+  "feedback": {
+    "sm1": "You have Topic, Verb, Object, Detail, Effect components present. Your Details are specific.",
+    "sm1_next": "Your specific details are good - now add more precise contextual information.",
+    "sm2": "You make 3 analytical attempts across your writing.",
+    "sm2_next": "Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point.",
+    "sm3": "You use 2 connectors and have approximately 0 grammar issues.",
+    "sm3_next": "Focus on subject-verb agreement and use more connectors like 'therefore' and 'which' to link ideas."
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "student": "Jayden",
+  "assignment": "Week 4",
+  "scores": {
+    "sm1": 4.0,
+    "sm2": 2.5,
+    "sm3": 3.0,
+    "overall": 3.25,
+    "total_points": 16.25,
+    "ceiling": 4.0
+  },
+  "components": {
+    "topics": [
+      "Giver",
+      "Limited:",
+      "Lowry",
+      "For",
+      "Third",
+      "Person",
+      "narrator",
+      "Examples",
+      "point of view",
+      "foreshadowing"
+    ],
+    "verbs": [],
+    "objects": [
+      "jonas",
+      "see",
+      "feel",
+      "his"
+    ],
+    "detail_count": 5,
+    "effect_count": 6,
+    "detail_quality": "specific"
+  },
+  "feedback": {
+    "sm1": "You have Topic, Object, Detail, Effect components present. Your Details are specific.",
+    "sm1_next": "Your specific details are good - now add more precise contextual information.",
+    "sm2": "You make 0 analytical attempts across your writing.",
+    "sm2_next": "Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point.",
+    "sm3": "You use 1 connectors and have approximately 0 grammar issues.",
+    "sm3_next": "Focus on subject-verb agreement and use more connectors like 'therefore' and 'which' to link ideas."
+  }
+}
