@@ -2,11 +2,19 @@
 """
 TVODE Transcriber - Structured transcription with confidence scoring
 
+VERSION 2.0 - Conservative prompt to prevent hallucinations
+
 Handles:
 - Image to text conversion using Claude API
 - Uncertainty detection (unclear words, strikethroughs)
 - Confidence scoring
 - Structured JSON output
+
+CRITICAL CHANGE (v2.0):
+- New conservative prompt prevents AI from inferring/guessing unclear text
+- AI must flag uncertain words as [UNCLEAR] instead of fabricating plausible text
+- Explicit "do not use language understanding to fill gaps" rules
+- 95% visual certainty threshold before transcribing
 """
 
 import os
@@ -77,24 +85,111 @@ class TVODETranscriber:
         return image_data, media_type
     
     def _build_transcription_prompt(self, student_name: str, assignment: str) -> str:
-        """Build structured transcription prompt"""
+        """Build CONSERVATIVE transcription prompt (v2.0 - anti-hallucination)
         
-        prompt = f"""Transcribe this handwritten student work and return a structured JSON response.
+        This prompt is designed to prevent AI hallucinations by:
+        1. Explicit "do not infer" rules
+        2. Quantified 95% confidence threshold
+        3. [UNCLEAR] marker system for uncertain words
+        4. Self-check protocol
+        5. Concrete examples of correct behavior
+        """
+        
+        prompt = f"""You are transcribing handwritten student work. You are a LITERAL transcription tool, NOT a helpful assistant.
 
 **Student:** {student_name}
 **Assignment:** {assignment}
 
-**Instructions:**
-1. Transcribe verbatim - preserve spelling errors and grammar mistakes (they're data for evaluation)
-2. IGNORE any strikethrough text (crossed-out words)
-3. Note any inserted or squeezed-in text
-4. Flag unclear words with alternatives
-5. Assess handwriting quality
+═══════════════════════════════════════════════════════════
+CRITICAL RULES (NO EXCEPTIONS):
+═══════════════════════════════════════════════════════════
 
-**Return valid JSON only (no markdown, no backticks):**
+1. TRANSCRIBE ONLY TEXT WITH 95%+ VISUAL CERTAINTY
+   - If you cannot clearly see each letter → Use [UNCLEAR: context]
+   - If multiple interpretations possible → Use [UNCLEAR: option1/option2]
+   - If word is missing/illegible → Use [MISSING]
+
+2. DO NOT USE LANGUAGE UNDERSTANDING TO FILL GAPS
+   - ❌ WRONG: See unclear word, infer from context what "makes sense"
+   - ✅ RIGHT: See unclear word, write [UNCLEAR: surrounding context]
+   
+3. DO NOT USE SEMANTIC REASONING TO CHOOSE ALTERNATIVES
+   - ❌ WRONG: "The word 'culture' fits the sentence flow better than 'future'"
+   - ✅ RIGHT: Flag as [UNCLEAR: culture/future] and let human decide
+
+4. IGNORE ALL CROSSED-OUT TEXT COMPLETELY
+   - If you see a line through text → Skip it entirely, do not transcribe
+   - If uncertain whether crossed out → Flag as [STRIKETHROUGH?: text]
+
+5. PRESERVE ALL STUDENT ERRORS EXACTLY
+   - Grammar errors → Keep them exactly as written
+   - Spelling errors → Keep them exactly as written
+   - Punctuation errors → Keep them exactly as written
+   - Missing words → Do NOT add them
+
+═══════════════════════════════════════════════════════════
+EXAMPLES OF CORRECT BEHAVIOR:
+═══════════════════════════════════════════════════════════
+
+Example 1: UNCLEAR WORD
+Student writes unclear word between "Jonas takes" and "apple"
+❌ BAD:  "Jonas takes the apple" (guessing "the")
+✅ GOOD: "Jonas takes [UNCLEAR: word before apple] apple"
+
+Example 2: MULTIPLE INTERPRETATIONS
+Student's handwriting could be "third" or "sled"
+❌ BAD:  "make his third ride" (choosing contextually fitting word)
+✅ GOOD: "make his [UNCLEAR: third/sled] ride"
+
+Example 3: CONTEXTUAL INFERENCE
+Paragraph about specialness, unclear word after "special"
+❌ BAD:  "special culture" (inferring from paragraph theme)
+✅ GOOD: "special [UNCLEAR: culture/future/feature]"
+
+Example 4: CROSSED-OUT TEXT
+Student wrote "allow readers make" with "allow readers" crossed out
+❌ BAD:  "allow readers make the reader question" (including strikethrough)
+✅ GOOD: "make the reader question" (strikethrough completely omitted)
+
+Example 5: GRAMMAR ERROR
+Student writes "Jonas think" (missing 's')
+❌ BAD:  "Jonas thinks" (correcting student error)
+✅ GOOD: "Jonas think" (preserving error exactly)
+
+Example 6: MISSING WORD
+Student writes "Jonas to school" (missing "went")
+❌ BAD:  "Jonas went to school" (adding logical word)
+✅ GOOD: "Jonas [MISSING] to school" or "Jonas to school" (preserve as-is)
+
+═══════════════════════════════════════════════════════════
+SELF-CHECK PROTOCOL (USE THIS BEFORE FINALIZING):
+═══════════════════════════════════════════════════════════
+
+For EVERY word you transcribe, ask yourself:
+
+Q1: Can I point to exact pixels forming each letter of this word?
+    → If NO: Use [UNCLEAR]
+
+Q2: Am I using "what would make sense here" to choose this word?
+    → If YES: STOP, mark as [UNCLEAR] instead
+
+Q3: Am I using semantic understanding of the paragraph to fill this gap?
+    → If YES: STOP, you are inferring not transcribing
+
+Q4: Did I check for strikethrough lines over this text?
+    → If UNSURE whether crossed out: Flag as [STRIKETHROUGH?: text]
+
+Q5: Am I correcting student's grammar/spelling because it "should be" correct?
+    → If YES: STOP, preserve error exactly as written
+
+═══════════════════════════════════════════════════════════
+OUTPUT FORMAT:
+═══════════════════════════════════════════════════════════
+
+Return ONLY valid JSON (no markdown, no backticks, no explanatory text):
 
 {{
-  "transcription": "Full verbatim text here...",
+  "transcription": "Full text with [UNCLEAR] and [MISSING] markers preserved in-line...",
   "metadata": {{
     "word_count": 156,
     "handwriting_quality": "clear|moderate|difficult",
@@ -104,20 +199,31 @@ class TVODETranscriber:
   "uncertainties": [
     {{
       "line_number": 5,
-      "context": "...surrounding text...",
-      "unclear_word": "word",
-      "alternatives": ["word1", "word2"],
+      "context": "...surrounding text showing where unclear word appears...",
+      "unclear_word": "[UNCLEAR: option1/option2]",
+      "alternatives": ["option1", "option2"],
       "confidence": "low|medium|high",
-      "reason": "why unclear"
+      "reason": "specific visual reason why unclear (e.g., 'letters cramped', 'ink smudge', 'word squeezed above line')"
     }}
   ],
   "notes": [
     "Line 3: crossed out 'axes', replaced with 'cues'",
-    "Possible spelling error 'roll' vs 'role' at line 8"
+    "Line 8: Possible spelling error 'roll' vs 'role' preserved as written",
+    "Line 12: Word squeezed above line but readable"
   ]
 }}
 
-**Critical:** Return ONLY valid JSON. No explanatory text before or after."""
+═══════════════════════════════════════════════════════════
+FINAL REMINDER:
+═══════════════════════════════════════════════════════════
+
+USE [UNCLEAR] LIBERALLY. It is FAR BETTER to flag 20 words as uncertain than to miss 1 hallucination.
+
+Your job is LITERAL TRANSCRIPTION, not helpful completion of student work.
+
+When in doubt → [UNCLEAR]
+
+Return ONLY valid JSON."""
 
         return prompt
     
@@ -167,28 +273,15 @@ class TVODETranscriber:
         # Combine all pages
         combined_transcription = "\n\n".join(all_transcriptions)
         
-        # Convert dict uncertainties to Uncertainty objects (FIX FOR BUG)
-        uncertainty_objects = [
-            Uncertainty(
-                line_number=u['line_number'],
-                context=u['context'],
-                unclear_word=u['unclear_word'],
-                alternatives=u['alternatives'],
-                confidence=u['confidence'],
-                reason=u['reason']
-            )
-            for u in all_uncertainties
-        ]
-        
         # Calculate accuracy score
         accuracy_score = self._calculate_accuracy_score(
-            uncertainty_objects,
+            all_uncertainties,
             worst_handwriting,
             any_strikethroughs
         )
         
         # Determine if review needed
-        requires_review = self._needs_review(uncertainty_objects, worst_handwriting, accuracy_score)
+        requires_review = self._needs_review(all_uncertainties, worst_handwriting, accuracy_score)
         
         result = TranscriptionResult(
             student_name=student_name,
@@ -198,7 +291,7 @@ class TVODETranscriber:
             word_count=total_word_count,
             handwriting_quality=worst_handwriting,
             strikethroughs_present=any_strikethroughs,
-            uncertainties=uncertainty_objects,
+            uncertainties=all_uncertainties,
             accuracy_score=accuracy_score,
             requires_review=requires_review,
             notes=all_notes
@@ -207,7 +300,7 @@ class TVODETranscriber:
         print(f"\n✓ All pages transcribed")
         print(f"  Total word count: {total_word_count}")
         print(f"  Handwriting: {worst_handwriting}")
-        print(f"  Total uncertainties: {len(uncertainty_objects)}")
+        print(f"  Total uncertainties: {len(all_uncertainties)}")
         print(f"  Accuracy: {accuracy_score:.1%}")
         print(f"  Review needed: {'YES' if requires_review else 'NO'}")
         
@@ -266,7 +359,7 @@ class TVODETranscriber:
             print(f"Response text: {response_text[:500]}")
             raise e
         
-        # Build uncertainties for this page (keep as dicts for now)
+        # Build uncertainties for this page
         uncertainties = [
             {
                 'line_number': u.get('line_number', 0),
@@ -365,61 +458,54 @@ class TVODETranscriber:
         return output_path
     
     def format_review_prompt(self, result: TranscriptionResult) -> str:
-        """Format uncertainties for targeted review"""
+        """Format uncertainties for targeted review
+        
+        Note: Uncertainties may be dicts or Uncertainty objects depending on context.
+        This method handles both formats.
+        """
         
         if not result.requires_review:
             return "No review needed - auto-accepting transcription."
         
-        output = f"\n{'▔'*60}\n"
+        output = f"\n{'═'*60}\n"
         output += f"REVIEW NEEDED: {len(result.uncertainties)} uncertain section(s)\n"
-        output += f"{'▔'*60}\n\n"
+        output += f"{'═'*60}\n\n"
         
         for i, uncertainty in enumerate(result.uncertainties, 1):
-            output += f"Section {i} (Line {uncertainty.line_number}):\n"
-            output += f"  Context: \"{uncertainty.context}\"\n"
-            output += f"  Unclear word: [{uncertainty.unclear_word}]\n"
-            output += f"  Alternatives: {', '.join(uncertainty.alternatives)}\n"
-            output += f"  Reason: {uncertainty.reason}\n"
+            # Handle both dict and dataclass formats
+            if isinstance(uncertainty, dict):
+                line_num = uncertainty.get('line_number', 0)
+                context = uncertainty.get('context', '')
+                unclear = uncertainty.get('unclear_word', '')
+                alts = uncertainty.get('alternatives', [])
+                reason = uncertainty.get('reason', '')
+            else:
+                line_num = uncertainty.line_number
+                context = uncertainty.context
+                unclear = uncertainty.unclear_word
+                alts = uncertainty.alternatives
+                reason = uncertainty.reason
+            
+            output += f"Section {i} (Line {line_num}):\n"
+            output += f"  Context: \"{context}\"\n"
+            output += f"  Unclear word: [{unclear}]\n"
+            output += f"  Alternatives: {', '.join(alts)}\n"
+            output += f"  Reason: {reason}\n"
             output += f"\n  Correction: _______\n"
-            output += f"  (or press Enter to accept \"{uncertainty.unclear_word}\")\n\n"
+            output += f"  (or press Enter to accept \"{unclear}\")\n\n"
         
-        output += f"{'▔'*60}\n"
+        output += f"{'═'*60}\n"
         output += f"Auto-accepting remaining {result.word_count - len(result.uncertainties)} words\n"
-        output += f"{'▔'*60}\n"
+        output += f"{'═'*60}\n"
         
         return output
 
 
 def test_transcriber():
-    """Test the transcriber"""
-    
-    # Test with Coden's Week 4 PDF
-    test_file = "/mnt/user-data/uploads/Coden_-_week_4.pdf"
-    
-    if not os.path.exists(test_file):
-        print(f"Test file not found: {test_file}")
-        return
-    
-    transcriber = TVODETranscriber()
-    
-    result = transcriber.transcribe(
-        image_path=test_file,
-        student_name="Coden",
-        assignment="Week 4"
-    )
-    
-    # Save result
-    output_dir = Path("/mnt/user-data/outputs/transcripts")
-    output_path = transcriber.save_result(result, output_dir)
-    
-    # Show review prompt if needed
-    if result.requires_review:
-        print(transcriber.format_review_prompt(result))
-    
-    print(f"\n{'='*60}")
-    print("TRANSCRIPTION:")
-    print(f"{'='*60}")
-    print(result.transcription[:500] + "..." if len(result.transcription) > 500 else result.transcription)
+    """Test the transcriber - not used in production workflow"""
+    print("This test function is not used in production.")
+    print("Use tvode_automation.py instead:")
+    print('  python3 tvode_automation.py --image "file.jpg" --student "Name" --assignment "Week 4"')
 
 
 if __name__ == "__main__":

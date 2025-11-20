@@ -111,16 +111,28 @@ class TVODEAutomation:
         corrected_text = transcript.transcription
         
         for uncertainty in transcript.uncertainties:
-            print(f"\nSection at line {uncertainty.line_number}:")
-            print(f"Context: \"{uncertainty.context}\"")
-            print(f"Current: [{uncertainty.unclear_word}]")
-            print(f"Alternatives: {', '.join(uncertainty.alternatives)}")
+            # Handle both dict and dataclass formats
+            if isinstance(uncertainty, dict):
+                line_num = uncertainty.get('line_number', 0)
+                context = uncertainty.get('context', '')
+                unclear = uncertainty.get('unclear_word', '')
+                alts = uncertainty.get('alternatives', [])
+            else:
+                line_num = uncertainty.line_number
+                context = uncertainty.context
+                unclear = uncertainty.unclear_word
+                alts = uncertainty.alternatives
+            
+            print(f"\nSection at line {line_num}:")
+            print(f"Context: \"{context}\"")
+            print(f"Current: [{unclear}]")
+            print(f"Alternatives: {', '.join(alts)}")
             
             correction = input("\nCorrection (or Enter to keep): ").strip()
             
             if correction:
                 # Replace in transcription
-                corrected_text = corrected_text.replace(uncertainty.unclear_word, correction, 1)
+                corrected_text = corrected_text.replace(unclear, correction, 1)
                 print(f"✓ Updated to: {correction}")
         
         # Update transcript
@@ -205,7 +217,6 @@ class TVODEAutomation:
         percentage = (eval_result.overall_score / 5 * 100)
         
         report = f"""{'='*70}
-
 TVODE REPORT CARD
 {'='*70}
 

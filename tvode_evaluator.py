@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-TVODE Evaluator - Programmatic Implementation of v3.3 Rubric
+TVODE Evaluator v2.0 - Enhanced with Option A Taxonomies
 
-Converts rubric logic into code that can score transcripts automatically.
+ENHANCEMENTS:
+1. Tiered Verb Taxonomy (Tier 1-3 for analytical sophistication)
+2. Detail Quality Decision Tree (4.0, 4.25, 4.5, 4.75, 5.0 granularity)
+3. Effect Taxonomy (Tier 1-5 for meaning production quality)
+4. Connector Function Classification (variety tracking)
+
+Based on v3.3 Rubric + V2 Requirements analysis
 """
 
 import re
 import json
 from typing import Dict, List, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -20,6 +26,14 @@ class TVODEComponents:
     details: List[str]
     effects: List[str]
     detail_quality: str  # "missing", "vague", "specific", "precise"
+    
+    # Enhanced tracking
+    verb_tiers: Dict[str, List[str]] = field(default_factory=dict)
+    effect_tiers: Dict[str, List[str]] = field(default_factory=dict)
+    connector_types: Dict[str, List[str]] = field(default_factory=dict)
+    detail_score: float = 0.0
+    verb_quality_score: float = 0.0
+    effect_quality_score: float = 0.0
 
 
 @dataclass
@@ -36,45 +50,136 @@ class EvaluationResult:
 
 
 class TVODEEvaluator:
-    """Programmatic evaluator implementing v3.3 rubric logic"""
+    """Enhanced programmatic evaluator implementing v3.3 rubric + Option A taxonomies"""
     
-    # Analytical verb patterns from rubric
-    ANALYTICAL_VERBS = [
-        'shows', 'reveals', 'creates', 'demonstrates', 'illustrates',
-        'makes', 'causes', 'produces', 'establishes', 'builds',
-        'questions', 'challenges', 'suggests', 'implies', 'indicates',
-        'uses', 'employs', 'develops', 'constructs', 'presents'
-    ]
+    # ==================== OPTION A: TIERED VERB TAXONOMY ====================
     
-    # Literary devices and topics
+    ANALYTICAL_VERBS = {
+        'tier_1_strong': {
+            'verbs': [
+                'creates', 'reveals', 'demonstrates', 'challenges',
+                'undermines', 'exposes', 'critiques', 'interrogates',
+                'disrupts', 'subverts', 'constructs', 'deconstructs'
+            ],
+            'weight': 1.0,
+            'label': 'Critical Analysis'
+        },
+        'tier_2_moderate': {
+            'verbs': [
+                'shows', 'indicates', 'suggests', 'implies',
+                'reflects', 'illustrates', 'represents', 'conveys',
+                'establishes', 'develops', 'presents', 'depicts',
+                'portrays', 'allows', 'enables', 'helps', 'hints',
+                'prepares', 'builds'
+            ],
+            'weight': 0.5,
+            'label': 'Pattern Recognition'
+        },
+        'tier_3_weak': {
+            'verbs': [
+                'is', 'are', 'was', 'were', 'has', 'have', 'had',
+                'uses', 'employs', 'does', 'makes', 'gets',
+                'becomes', 'seems', 'appears', 'looks', 'leave', 'leaves'
+            ],
+            'weight': 0.0,
+            'label': 'Description/Summary'
+        }
+    }
+    
+    # ==================== OPTION A: EFFECT TAXONOMY ====================
+    
+    EFFECT_TAXONOMY = {
+        'tier_1_alignment': {
+            'patterns': [
+                r'produc(?:es|ing)\s+(?:reinforcing|tensioning|mediating)\s+alignment',
+                r'creat(?:es|ing)\s+(?:reinforcing|tensioning)\s+alignment',
+                r'generat(?:es|ing)\s+meaning\s+through',
+                r'alignment\s+where',
+                r'the\s+gap\s+between.*constitutes',
+                r'productive\s+(?:mis)?alignment',
+            ],
+            'weight': 1.0,
+            'label': 'Alignment-Based Analysis'
+        },
+        'tier_2_meaning': {
+            'patterns': [
+                r'reveal(?:s|ing)\s+(?:how|that|why)',
+                r'expos(?:es|ing).*(?:system|pattern|contradiction)',
+                r'demonstrat(?:es|ing)\s+(?:how|that)',
+                r'enabl(?:es|ing)\s+readers?\s+to',
+                r'forc(?:es|ing)\s+readers?\s+to',
+                r'requir(?:es|ing)\s+readers?\s+to\s+construct',
+                r'show(?:s|ing)\s+(?:how|that).*(?:work|function|construct)',
+                r'suggest(?:s|ing)\s+(?:how|that|why)',
+            ],
+            'weight': 0.75,
+            'label': 'Meaning Production'
+        },
+        'tier_3_reader': {
+            'patterns': [
+                r'makes?\s+(?:the\s+)?readers?\s+(?:feel|understand|question|recognize)',
+                r'allows?\s+readers?\s+to',
+                r'helps?\s+readers?\s+(?:understand|see|realize)',
+                r'invit(?:es|ing)\s+readers?\s+to',
+                r'encourag(?:es|ing)\s+readers?\s+to',
+                r'(?:focus|concentrat)(?:es|ing)\s+on',
+            ],
+            'weight': 0.5,
+            'label': 'Reader Engagement'
+        },
+        'tier_4_generic': {
+            'patterns': [
+                r'makes?\s+(?:it|this|the\s+story)\s+(?:more\s+)?(?:interesting|engaging|meaningful)',
+                r'creates?\s+(?:tension|suspense|interest|mystery)',
+                r'shows?\s+(?:the|his|her)\s+(?:character|personality)',
+                r'is\s+important\s+(?:to|for|because)',
+                r'adds?\s+(?:depth|meaning|significance)',
+            ],
+            'weight': 0.25,
+            'label': 'Generic Effect'
+        },
+        'tier_5_missing': {
+            'patterns': [
+                r'(?:this|it)\s+(?:is|was)\s+.*(?:important|significant|meaningful)\s*$',
+                r'^(?:therefore|thus|so)\s*$',
+                r'affects?\s+(?:the\s+reader|us)\s*$',
+            ],
+            'weight': 0.0,
+            'label': 'Missing/Circular'
+        }
+    }
+    
+    # ==================== OPTION A: CONNECTOR CLASSIFICATION ====================
+    
+    CONNECTORS = {
+        'addition': ['furthermore', 'moreover', 'additionally', 'also', 'in addition', 'besides'],
+        'contrast': ['however', 'nevertheless', 'whereas', 'although', 'yet', 'but', 'on the other hand', 'conversely'],
+        'cause_effect': ['therefore', 'thus', 'consequently', 'hence', 'thereby', 'as a result', 'so'],
+        'elaboration': ['which', 'whereby', 'wherein', 'through which', 'by which'],
+        'exemplification': ['for example', 'for instance', 'specifically', 'such as', 'namely'],
+        'summary': ['overall', 'in conclusion', 'ultimately', 'finally', 'in summary']
+    }
+    
+    # Literary devices and topics (unchanged)
     LITERARY_TOPICS = [
         'narrator', 'narration', 'point of view', 'pov', 'perspective',
         'character', 'protagonist', 'author', 'lowry', 'fitzgerald',
         'tone', 'theme', 'conflict', 'resolution', 'setting',
-        'metaphor', 'symbolism', 'irony', 'foreshadowing', 'imagery'
-    ]
-    
-    # Effect indicators
-    EFFECT_MARKERS = [
-        'therefore', 'thus', 'so', 'as a result', 'consequently',
-        'this shows', 'this reveals', 'this creates', 'this makes',
-        'which', 'that', 'to'
-    ]
-    
-    # Connectors for SM3
-    CONNECTORS = [
-        'therefore', 'thus', 'however', 'moreover', 'furthermore',
-        'for example', 'for instance', 'in addition', 'consequently',
-        'nevertheless', 'on the other hand', 'similarly', 'likewise'
+        'metaphor', 'symbolism', 'irony', 'foreshadowing', 'imagery',
+        'reliable narrator', 'unreliable narrator', 'third person', 'first person'
     ]
     
     def __init__(self):
-        pass
+        # Flatten verb lists for quick lookup
+        self.all_verbs = {}
+        for tier_name, tier_data in self.ANALYTICAL_VERBS.items():
+            for verb in tier_data['verbs']:
+                self.all_verbs[verb] = (tier_name, tier_data['weight'], tier_data['label'])
     
     # ==================== COMPONENT EXTRACTION ====================
     
     def extract_components(self, text: str) -> TVODEComponents:
-        """Extract TVODE components from transcript text"""
+        """Extract TVODE components from transcript text with enhanced tracking"""
         
         # Clean text
         text_lower = text.lower()
@@ -82,13 +187,14 @@ class TVODEEvaluator:
         
         # Extract components
         topics = self._extract_topics(text_lower, sentences)
-        verbs = self._extract_verbs(text_lower, sentences)
+        verbs, verb_tiers, verb_quality = self._extract_verbs_enhanced(text_lower, sentences)
         objects = self._extract_objects(text_lower, sentences)
         details = self._extract_details(text, sentences)
-        effects = self._extract_effects(text_lower, sentences)
+        effects, effect_tiers, effect_quality = self._extract_effects_enhanced(text, sentences)
+        connector_types = self._extract_connectors_enhanced(text_lower)
         
-        # Assess detail quality
-        detail_quality = self._assess_detail_quality(details, text)
+        # Assess detail quality with decision tree
+        detail_quality, detail_score = self._assess_detail_quality_v2(details, text)
         
         return TVODEComponents(
             topics=topics,
@@ -96,7 +202,13 @@ class TVODEEvaluator:
             objects=objects,
             details=details,
             effects=effects,
-            detail_quality=detail_quality
+            detail_quality=detail_quality,
+            verb_tiers=verb_tiers,
+            effect_tiers=effect_tiers,
+            connector_types=connector_types,
+            detail_score=detail_score,
+            verb_quality_score=verb_quality,
+            effect_quality_score=effect_quality
         )
     
     def _extract_topics(self, text_lower: str, sentences: List[str]) -> List[str]:
@@ -113,20 +225,25 @@ class TVODEEvaluator:
             words = sentence.split()
             for word in words:
                 if word and word[0].isupper() and len(word) > 2:
-                    if word.lower() not in ['the', 'this', 'that', 'chapter']:
+                    if word.lower() not in ['the', 'this', 'that', 'chapter', 'in', 'and', 'for']:
                         topics.append(word)
         
         return list(set(topics))  # Remove duplicates
     
-    def _extract_verbs(self, text_lower: str, sentences: List[str]) -> List[str]:
-        """Extract analytical Verbs"""
+    def _extract_verbs_enhanced(self, text_lower: str, sentences: List[str]) -> Tuple[List[str], Dict, float]:
+        """Extract analytical Verbs with tier classification"""
         verbs = []
+        verb_tiers = {'tier_1': [], 'tier_2': [], 'tier_3': []}
+        total_score = 0.0
         
-        for verb in self.ANALYTICAL_VERBS:
-            if verb in text_lower:
-                verbs.append(verb)
+        for verb_word, (tier, weight, label) in self.all_verbs.items():
+            if verb_word in text_lower:
+                verbs.append(verb_word)
+                tier_key = tier.split('_')[0] + '_' + tier.split('_')[1]  # tier_1, tier_2, tier_3
+                verb_tiers[tier_key].append(verb_word)
+                total_score += weight
         
-        return list(set(verbs))
+        return list(set(verbs)), verb_tiers, total_score
     
     def _extract_objects(self, text_lower: str, sentences: List[str]) -> List[str]:
         """Extract Objects (what's affected by the analysis)"""
@@ -134,8 +251,8 @@ class TVODEEvaluator:
         
         # Pattern: "make/create the reader [verb]"
         reader_patterns = [
-            r'(?:make|makes|create|creates|cause|causes)\s+(?:the\s+)?reader[s]?\s+(\w+)',
-            r'reader[s]?\s+(?:to\s+)?(\w+)',
+            r'(?:make|makes|create|creates|cause|causes)\s+(?:the\s+)?readers?\s+(\w+)',
+            r'readers?\s+(?:to\s+)?(\w+)',
             r'(?:believe|question|understand|feel|think|realize)\s+(\w+)'
         ]
         
@@ -147,7 +264,7 @@ class TVODEEvaluator:
         
         # Pattern: nouns after analytical verbs
         for sentence in sentences:
-            for verb in self.ANALYTICAL_VERBS:
+            for verb in self.all_verbs.keys():
                 if verb in sentence.lower():
                     # Extract words after verb
                     parts = sentence.lower().split(verb)
@@ -183,221 +300,311 @@ class TVODEEvaluator:
         
         return details
     
-    def _extract_effects(self, text_lower: str, sentences: List[str]) -> List[str]:
-        """Extract Effects (interpretive outcomes)"""
+    def _extract_effects_enhanced(self, text: str, sentences: List[str]) -> Tuple[List[str], Dict, float]:
+        """Extract Effects with tier classification"""
         effects = []
+        effect_tiers = {'tier_1': [], 'tier_2': [], 'tier_3': [], 'tier_4': [], 'tier_5': []}
+        total_score = 0.0
         
-        # Pattern: Sentences containing effect markers
         for sentence in sentences:
             sentence_lower = sentence.lower()
-            for marker in self.EFFECT_MARKERS:
-                if marker in sentence_lower:
-                    effects.append(sentence.strip())
+            matched = False
+            
+            # Check each tier from highest to lowest
+            for tier_name in ['tier_1_alignment', 'tier_2_meaning', 'tier_3_reader', 'tier_4_generic', 'tier_5_missing']:
+                tier_data = self.EFFECT_TAXONOMY[tier_name]
+                for pattern in tier_data['patterns']:
+                    if re.search(pattern, sentence_lower):
+                        effects.append(sentence.strip())
+                        tier_key = tier_name.split('_')[0] + '_' + tier_name.split('_')[1]
+                        effect_tiers[tier_key].append(sentence.strip())
+                        total_score += tier_data['weight']
+                        matched = True
+                        break
+                if matched:
                     break
         
-        return effects
+        return effects, effect_tiers, total_score
     
-    def _assess_detail_quality(self, details: List[str], full_text: str) -> str:
-        """Assess Detail component quality per rubric criteria"""
+    def _extract_connectors_enhanced(self, text_lower: str) -> Dict[str, List[str]]:
+        """Extract connectors and classify by function"""
+        connector_types = {}
         
-        if not details:
-            return "missing"
+        for func_type, connectors in self.CONNECTORS.items():
+            found = []
+            for conn in connectors:
+                if conn in text_lower:
+                    found.append(conn)
+            if found:
+                connector_types[func_type] = found
         
-        # Check for specific details (quotes, precise descriptions)
-        text_lower = full_text.lower()
+        return connector_types
+    
+    # ==================== OPTION A: DETAIL QUALITY DECISION TREE ====================
+    
+    def _assess_detail_quality_v2(self, details: List[str], text: str) -> Tuple[str, float]:
+        """
+        V2 Decision Tree for Detail Quality Assessment
         
-        # Count vague phrases per rubric examples
-        vague_phrases = [
-            'careful language', 'curious about things', 'emotions and memories',
-            'shows emotions', 'different things', 'special ability',
-            'description are limited', 'no pain memory', 'make the reader'
+        Returns: (quality_label, numeric_score)
+        - 5.0: precise (quote + attribution + 4 context elements)
+        - 4.75: precise (quote + attribution + 3 context)
+        - 4.5: precise (quote + attribution + 2 context)
+        - 4.25: specific (quote + attribution + 1 context)
+        - 4.0: specific (quote without attribution OR paraphrase with visualization)
+        - 3.0: vague (general descriptions)
+        - 2.0: missing
+        """
+        
+        if not details or len(details) == 0:
+            return "missing", 2.0
+        
+        # Step 1: Check for direct quotes
+        quotes = re.findall(r'"([^"]+)"', text)
+        
+        if not quotes:
+            # Step 2: Paraphrase specificity check
+            if self._can_visualize_moment(details, text):
+                return "specific", 4.0
+            else:
+                return "vague", 3.0
+        
+        # Step 3: Quote quality check - has attribution?
+        has_attribution = bool(re.search(r'(?:p\.|page)\s*\d+|chapter\s+\d+', text, re.I))
+        
+        if not has_attribution:
+            return "specific", 4.0  # Quote without page context
+        
+        # Step 4: Contextual precision check (each adds 0.25)
+        score = 4.0
+        context_elements = 0
+        
+        if self._explains_when(text):
+            score += 0.25
+            context_elements += 1
+        
+        if self._explains_why(text):
+            score += 0.25
+            context_elements += 1
+        
+        if self._explains_how(text):
+            score += 0.25
+            context_elements += 1
+        
+        if self._explains_what_reveals(text):
+            score += 0.25
+            context_elements += 1
+        
+        # Determine label
+        if score >= 4.75:
+            return "precise", 5.0
+        elif score >= 4.25:
+            return "precise", score
+        else:
+            return "specific", score
+    
+    def _can_visualize_moment(self, details: List[str], text: str) -> bool:
+        """Check if paraphrases are specific enough to visualize"""
+        # Look for concrete nouns, sensory details, specific actions
+        visualization_markers = [
+            r'\b(?:eyes|face|hands|voice|body|snow|air|cold|warm|light|dark)\b',
+            r'\b(?:walked|ran|felt|saw|heard|touched|breathed|looked)\b',
+            r'\b(?:slowly|quickly|suddenly|carefully|gently|sharply)\b',
         ]
         
-        vague_count = sum(1 for phrase in vague_phrases if phrase in text_lower)
+        text_lower = text.lower()
+        marker_count = sum(1 for pattern in visualization_markers if re.search(pattern, text_lower))
         
-        # Check for quotes
-        has_quotes = '"' in full_text
-        quote_count = full_text.count('"') // 2
-        
-        # Check for analytical depth (not just quotes, but HOW quotes are used)
-        analytical_connectors = ['which shows', 'which reveals', 'therefore', 'this shows']
-        has_analysis = any(conn in text_lower for conn in analytical_connectors)
-        
-        # Rubric criteria:
-        # - Precise (5): Quotes + analytical interpretation + no vague language
-        # - Specific (4): Quotes + some context OR detailed descriptions
-        # - Vague (3): General references without quotes or specifics
-        
-        if has_quotes and quote_count >= 2 and has_analysis and vague_count == 0:
-            return "precise"
-        elif has_quotes and quote_count >= 2:
-            return "specific"
-        elif has_quotes or (len(details) >= 3 and vague_count <= 1):
-            return "specific"
-        elif vague_count > 1:
-            return "vague"
-        else:
-            return "vague"
+        return marker_count >= 2
+    
+    def _explains_when(self, text: str) -> bool:
+        """Check for temporal context"""
+        when_patterns = [
+            r'(?:when|after|before|during|while)\s+\w+',
+            r'(?:in|at)\s+(?:chapter|page|the\s+beginning|the\s+end)',
+        ]
+        return any(re.search(p, text.lower()) for p in when_patterns)
+    
+    def _explains_why(self, text: str) -> bool:
+        """Check for causal explanation"""
+        why_patterns = [
+            r'(?:because|since|due\s+to|as\s+a\s+result)',
+            r'(?:to|in\s+order\s+to)\s+\w+',
+        ]
+        return any(re.search(p, text.lower()) for p in why_patterns)
+    
+    def _explains_how(self, text: str) -> bool:
+        """Check for mechanism explanation"""
+        how_patterns = [
+            r'(?:by|through|via|using)\s+\w+',
+            r'(?:with|without)\s+\w+',
+        ]
+        return any(re.search(p, text.lower()) for p in how_patterns)
+    
+    def _explains_what_reveals(self, text: str) -> bool:
+        """Check for interpretive connection"""
+        reveals_patterns = [
+            r'(?:which|that|this)\s+(?:shows|reveals|demonstrates|suggests|indicates)',
+            r'(?:revealing|showing|demonstrating)\s+(?:how|that|why)',
+        ]
+        return any(re.search(p, text.lower()) for p in reveals_patterns)
     
     # ==================== SCORING LOGIC ====================
     
     def score_sm1(self, components: TVODEComponents) -> Tuple[float, float]:
-        """Score Sub-Metric 1: Component Presence
+        """
+        SM1: Component Presence + Detail Quality → Ceiling
         
-        Returns: (score, ceiling)
+        Enhanced to use:
+        - Tier 1-2 verbs only (Tier 3 doesn't count as functional)
+        - Detail decision tree score
         """
         
-        # Count present components
-        present = sum([
-            len(components.topics) > 0,
-            len(components.verbs) > 0,
-            len(components.objects) > 0,
-            len(components.details) > 0,
-            len(components.effects) > 0
-        ])
+        # Count functional components
+        has_topic = len(components.topics) > 0
+        has_verb_functional = len(components.verb_tiers.get('tier_1', [])) > 0 or len(components.verb_tiers.get('tier_2', [])) > 0
+        has_object = len(components.objects) > 0
+        has_detail = len(components.details) > 0
+        has_effect_functional = (
+            len(components.effect_tiers.get('tier_1', [])) > 0 or
+            len(components.effect_tiers.get('tier_2', [])) > 0 or
+            len(components.effect_tiers.get('tier_3', [])) > 0
+        )
         
-        # Apply rubric scoring logic
-        if components.detail_quality == "precise" and present == 5:
-            score = 5.0
+        present_count = sum([has_topic, has_verb_functional, has_object, has_detail, has_effect_functional])
+        
+        # SM1 Score based on presence + detail quality
+        detail_score = components.detail_score
+        
+        # Lookup table (from rubric)
+        if present_count == 5 and detail_score >= 5.0:
+            sm1 = 5.0
             ceiling = 5.0
-        elif components.detail_quality == "specific" and present >= 4:
-            score = 4.0
+        elif present_count == 5 and detail_score >= 4.5:
+            sm1 = 4.5
+            ceiling = 4.5
+        elif present_count == 5 and detail_score >= 4.0:
+            sm1 = 4.0
             ceiling = 4.0
-        elif components.detail_quality in ["vague", "specific"] and present >= 3:
-            score = 3.0
+        elif present_count >= 4 and detail_score >= 4.0:
+            sm1 = 3.5
+            ceiling = 4.0
+        elif present_count >= 4 or detail_score >= 3.0:
+            sm1 = 3.0
             ceiling = 3.0
-        elif present == 2:
-            score = 2.0
-            ceiling = 2.0
+        elif present_count >= 3:
+            sm1 = 2.5
+            ceiling = 3.0
+        elif present_count >= 2:
+            sm1 = 2.0
+            ceiling = 2.5
         else:
-            score = 1.0
+            sm1 = 1.5
             ceiling = 2.0
         
-        return score, ceiling
+        return sm1, ceiling
     
     def score_sm2(self, text: str, components: TVODEComponents, ceiling: float) -> float:
-        """Score Sub-Metric 2: Density Performance
+        """
+        SM2: Density Performance (analytical attempts + quality)
         
-        Counts distinct analytical insights within ceiling constraint.
+        Enhanced to use:
+        - Verb tier weighting for quality assessment
+        - Effect tier weighting for depth assessment
         """
         
-        # Count distinct insights (non-repetitive analytical claims)
         sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
         
-        # Filter for analytical sentences (contain analytical verbs)
-        analytical_sentences = []
+        # Count analytical attempts (only Tier 1-2 verbs count)
+        functional_verbs = set()
+        for tier in ['tier_1', 'tier_2']:
+            functional_verbs.update(components.verb_tiers.get(tier, []))
+        
+        analytical_count = 0
         for sentence in sentences:
-            if any(verb in sentence.lower() for verb in self.ANALYTICAL_VERBS):
-                analytical_sentences.append(sentence)
+            sentence_lower = sentence.lower()
+            if any(verb in sentence_lower for verb in functional_verbs):
+                analytical_count += 1
         
-        # Count distinct topics/claims across analytical sentences
-        distinct_insights = self._count_distinct_insights(analytical_sentences, components)
+        # Quality multiplier based on verb/effect sophistication
+        avg_verb_tier = self._calculate_avg_tier(components.verb_tiers)
+        avg_effect_tier = self._calculate_avg_tier(components.effect_tiers)
         
-        # Score within ceiling per rubric
-        if ceiling == 3.0:
-            # Vague details ceiling
-            if distinct_insights >= 3:
-                return 3.0  # Maximum extraction
-            elif distinct_insights == 2:
-                return 2.5
-            elif distinct_insights == 1:
-                return 2.0
-            else:
-                return 1.5
+        quality_multiplier = (avg_verb_tier + avg_effect_tier) / 2
         
-        elif ceiling == 4.0:
-            # Specific details ceiling
-            if distinct_insights >= 4:
-                return 4.0
-            elif distinct_insights == 3:
-                return 3.5
-            elif distinct_insights == 2:
-                return 3.0
-            else:
-                return 2.5
+        # Adjusted distinct insights
+        distinct_insights = analytical_count * quality_multiplier
         
-        elif ceiling == 5.0:
-            # Precise details ceiling
-            if distinct_insights >= 5:
-                return 5.0
-            elif distinct_insights == 4:
-                return 4.5
-            else:
-                return 4.0
+        # Score based on density
+        if distinct_insights >= 4:
+            sm2_raw = 5.0
+        elif distinct_insights >= 3:
+            sm2_raw = 4.0
+        elif distinct_insights >= 2:
+            sm2_raw = 3.0
+        elif distinct_insights >= 1:
+            sm2_raw = 2.5
+        else:
+            sm2_raw = 2.0
         
-        else:  # ceiling 2.0
-            if distinct_insights >= 2:
-                return 2.0
-            else:
-                return 1.0
+        # Apply ceiling
+        return min(sm2_raw, ceiling)
     
-    def _count_distinct_insights(self, sentences: List[str], components: TVODEComponents) -> int:
-        """Count non-repetitive analytical insights"""
+    def _calculate_avg_tier(self, tier_dict: Dict[str, List]) -> float:
+        """Calculate average tier quality (1.0 = best, 0.0 = worst)"""
+        weights = {
+            'tier_1': 1.0,
+            'tier_2': 0.75,
+            'tier_3': 0.5,
+            'tier_4': 0.25,
+            'tier_5': 0.0
+        }
         
-        if not sentences:
-            return 0
+        total_weight = 0.0
+        total_count = 0
         
-        # More conservative approach: manually count different claims
-        # Each paragraph typically makes 1 main insight
-        paragraphs = len([s for s in sentences if len(s.split()) > 15])
+        for tier, items in tier_dict.items():
+            count = len(items)
+            if count > 0:
+                weight = weights.get(tier, 0.0)
+                total_weight += weight * count
+                total_count += count
         
-        # Check for repetition - if same verb + object appears multiple times
-        claim_patterns = set()
-        for sentence in sentences:
-            # Extract verb + object pattern
-            for verb in components.verbs:
-                for obj in components.objects:
-                    if verb in sentence.lower() and obj in sentence.lower():
-                        claim_patterns.add((verb, obj))
-        
-        # Conservative count: max of paragraph count or unique claim patterns, capped at 3
-        distinct_count = min(max(paragraphs, len(claim_patterns)), 3)
-        
-        return max(distinct_count, 1)  # Minimum 1 insight
+        return total_weight / total_count if total_count > 0 else 0.5
     
-    def score_sm3(self, text: str, ceiling: float) -> float:
-        """Score Sub-Metric 3: Cohesion Performance
+    def score_sm3(self, text: str, components: TVODEComponents, ceiling: float) -> float:
+        """
+        SM3: Cohesion Performance (connectors + grammar)
         
-        Assesses grammar, connectors, and organization within ceiling.
+        Enhanced to use:
+        - Connector variety bonus (not just count)
         """
         
-        # Count connectors
-        connector_count = sum(1 for conn in self.CONNECTORS if conn in text.lower())
+        # Count unique connector types (not just total connectors)
+        connector_count = sum(len(conns) for conns in components.connector_types.values())
+        connector_variety = len(components.connector_types)
         
-        # Detect grammar errors
+        # Variety bonus
+        variety_bonus = connector_variety * 0.1
+        effective_connectors = connector_count + variety_bonus
+        
+        # Grammar errors
         grammar_errors = self._detect_grammar_errors(text)
         
-        # Check organization (paragraphs, sections)
-        has_organization = '\n\n' in text or text.count('\n') > 2
+        # Score logic
+        if effective_connectors >= 3 and grammar_errors <= 2:
+            sm3_raw = 5.0
+        elif effective_connectors >= 2 and grammar_errors <= 3:
+            sm3_raw = 4.0
+        elif effective_connectors >= 1 and grammar_errors <= 4:
+            sm3_raw = 3.0
+        elif grammar_errors <= 5:
+            sm3_raw = 2.5
+        else:
+            sm3_raw = 2.0
         
-        # Score within ceiling
-        if ceiling == 3.0:
-            if grammar_errors <= 2 and connector_count >= 2:
-                return 3.0
-            elif grammar_errors <= 4 and connector_count >= 1:
-                return 2.5
-            else:
-                return 2.0
-        
-        elif ceiling == 4.0:
-            if grammar_errors <= 1 and connector_count >= 3 and has_organization:
-                return 4.0
-            elif grammar_errors <= 2 and connector_count >= 2:
-                return 3.5
-            else:
-                return 3.0
-        
-        elif ceiling == 5.0:
-            if grammar_errors == 0 and connector_count >= 4 and has_organization:
-                return 5.0
-            else:
-                return 4.5
-        
-        else:  # ceiling 2.0
-            if grammar_errors <= 5:
-                return 2.0
-            else:
-                return 1.5
+        # Apply ceiling
+        return min(sm3_raw, ceiling)
     
     def _detect_grammar_errors(self, text: str) -> int:
         """Simple grammar error detection (subject-verb agreement, fragments)"""
@@ -407,11 +614,11 @@ class TVODEEvaluator:
         
         # Pattern 1: Subject-verb agreement
         agreement_patterns = [
-            r'\b(?:description|narrator|character|theme|conflict)\s+are\b',  # Singular + plural verb
-            r'\b(?:descriptions|narrators|characters|themes)\s+is\b',  # Plural + singular verb
-            r'\b(?:he|she|it|this|that)\s+(?:have|are|were|leave|make)\b',  # Singular pronoun + plural verb
-            r'\b(?:they|we|these|those)\s+(?:has|is|was|leaves|makes)\b',  # Plural pronoun + singular verb
-            r'\bpoint of view.*?leave\b'  # "point of view leave" should be "leaves"
+            r'\b(?:description|narrator|character|theme|conflict)\s+are\b',
+            r'\b(?:descriptions|narrators|characters|themes)\s+is\b',
+            r'\b(?:he|she|it|this|that)\s+(?:have|are|were|leave|make)\b',
+            r'\b(?:they|we|these|those)\s+(?:has|is|was|leaves|makes)\b',
+            r'\bpoint of view.*?leave\b'
         ]
         
         for pattern in agreement_patterns:
@@ -419,23 +626,23 @@ class TVODEEvaluator:
         
         # Pattern 2: Awkward phrasing
         awkward_patterns = [
-            r'feel more deep in',  # Should be "feel more deeply drawn into"
-            r'make the reader to\s',  # Double infinitive
-            r'makes reader\s',  # Missing article
+            r'feel more deep in',
+            r'make the reader to\s',
+            r'makes reader\s',
         ]
         
         for pattern in awkward_patterns:
             errors += len(re.findall(pattern, text, re.IGNORECASE))
         
-        # Pattern 3: Very short fragments (< 3 words)
+        # Pattern 3: Very short fragments
         for sentence in sentences:
             if len(sentence.split()) < 3 and sentence.lower() not in ['yes', 'no', 'okay']:
                 errors += 1
         
-        # Pattern 4: Run-ons (very long sentences without proper punctuation)
+        # Pattern 4: Run-ons
         for sentence in sentences:
             if len(sentence.split()) > 35 and sentence.count(',') < 2:
-                errors += 0.5  # Count as half error
+                errors += 0.5
         
         return int(errors)
     
@@ -446,7 +653,7 @@ class TVODEEvaluator:
         
         text = transcript_json.get('transcription', '')
         
-        # Step 1: Extract components
+        # Step 1: Extract components with enhancements
         components = self.extract_components(text)
         
         # Step 2: Score SM1 and get ceiling
@@ -454,13 +661,13 @@ class TVODEEvaluator:
         
         # Step 3: Score SM2 and SM3 within ceiling
         sm2_score = self.score_sm2(text, components, ceiling)
-        sm3_score = self.score_sm3(text, ceiling)
+        sm3_score = self.score_sm3(text, components, ceiling)
         
         # Step 4: Calculate overall
         overall = (sm1_score * 0.4 + sm2_score * 0.3 + sm3_score * 0.3)
         total_points = overall * 5
         
-        # Step 5: Generate feedback
+        # Step 5: Generate enhanced feedback
         feedback = self._generate_feedback(components, sm1_score, sm2_score, sm3_score, text)
         
         return EvaluationResult(
@@ -475,119 +682,188 @@ class TVODEEvaluator:
         )
     
     def _generate_feedback(self, components: TVODEComponents, sm1: float, sm2: float, sm3: float, text: str) -> Dict[str, str]:
-        """Generate structured feedback per rubric template"""
+        """Generate enhanced structured feedback with tier information"""
         
         feedback = {}
         
-        # SM1 feedback
+        # SM1 feedback with tier details
         present_components = []
         if components.topics: present_components.append("Topic")
-        if components.verbs: present_components.append("Verb")
+        
+        tier1_verbs = len(components.verb_tiers.get('tier_1', []))
+        tier2_verbs = len(components.verb_tiers.get('tier_2', []))
+        if tier1_verbs > 0 or tier2_verbs > 0:
+            present_components.append(f"Verb (Tier 1: {tier1_verbs}, Tier 2: {tier2_verbs})")
+        
         if components.objects: present_components.append("Object")
         if components.details: present_components.append("Detail")
-        if components.effects: present_components.append("Effect")
+        
+        tier1_effects = len(components.effect_tiers.get('tier_1', []))
+        tier2_effects = len(components.effect_tiers.get('tier_2', []))
+        tier3_effects = len(components.effect_tiers.get('tier_3', []))
+        if tier1_effects > 0 or tier2_effects > 0 or tier3_effects > 0:
+            present_components.append(f"Effect (T1: {tier1_effects}, T2: {tier2_effects}, T3: {tier3_effects})")
         
         feedback['sm1'] = f"You have {', '.join(present_components)} components present. "
-        feedback['sm1'] += f"Your Details are {components.detail_quality}."
+        feedback['sm1'] += f"Your Details are {components.detail_quality} ({components.detail_score:.2f}/5)."
         
-        if components.detail_quality == "vague":
+        # Enhanced next steps based on weaknesses
+        if components.detail_score < 4.0:
             feedback['sm1_next'] = "Add specific textual moments with exact quotes or actions instead of general descriptions."
+        elif components.detail_score < 4.5:
+            feedback['sm1_next'] = "Add page numbers and more contextual elements (when/why/how/what it reveals)."
         else:
-            feedback['sm1_next'] = "Your specific details are good - now add more precise contextual information."
+            feedback['sm1_next'] = "Excellent detail precision! Maintain this level while expanding analytical depth."
         
-        # SM2 feedback
+        # Add verb improvement suggestions
+        if tier1_verbs == 0:
+            feedback['sm1_next'] += f" Try using Tier 1 verbs (reveals, creates, exposes, challenges) instead of Tier 3 verbs (uses, makes, has)."
+        
+        # SM2 feedback with quality assessment
         sentences = [s for s in re.split(r'[.!?]+', text) if s.strip()]
-        analytical_count = sum(1 for s in sentences if any(v in s.lower() for v in self.ANALYTICAL_VERBS))
+        functional_verbs = set()
+        for tier in ['tier_1', 'tier_2']:
+            functional_verbs.update(components.verb_tiers.get(tier, []))
         
-        feedback['sm2'] = f"You make {analytical_count} analytical attempts across your writing."
+        analytical_count = sum(1 for s in sentences if any(v in s.lower() for v in functional_verbs))
+        
+        avg_effect_tier = self._calculate_avg_tier(components.effect_tiers)
+        
+        feedback['sm2'] = f"You make {analytical_count} analytical attempts. "
+        if avg_effect_tier >= 0.75:
+            feedback['sm2'] += "Your effects show strong meaning production awareness."
+        elif avg_effect_tier >= 0.5:
+            feedback['sm2'] += "Your effects focus on reader engagement."
+        else:
+            feedback['sm2'] += "Your effects are mostly generic."
+        
         feedback['sm2_next'] = "Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point."
         
-        # SM3 feedback
-        connector_count = sum(1 for conn in self.CONNECTORS if conn in text.lower())
+        # Add effect improvement suggestions
+        if tier1_effects == 0 and tier2_effects == 0:
+            feedback['sm2_next'] += " Push toward meaning production effects: Instead of 'makes readers feel', explain HOW the device reveals/demonstrates deeper meaning."
+        
+        # SM3 feedback with variety tracking
+        connector_variety = len(components.connector_types)
+        total_connectors = sum(len(conns) for conns in components.connector_types.values())
         grammar_errors = self._detect_grammar_errors(text)
         
-        feedback['sm3'] = f"You use {connector_count} connectors and have approximately {grammar_errors} grammar issues."
-        feedback['sm3_next'] = "Focus on subject-verb agreement and use more connectors like 'therefore' and 'which' to link ideas."
+        feedback['sm3'] = f"You use {total_connectors} connectors across {connector_variety} types and have approximately {grammar_errors} grammar issues."
+        
+        if connector_variety <= 1:
+            feedback['sm3_next'] = "Use more connector variety: Add contrast words (however, although) and cause-effect words (therefore, thus) alongside addition words."
+        else:
+            feedback['sm3_next'] = "Good connector variety! Focus on reducing grammar issues, especially subject-verb agreement."
         
         return feedback
     
     # ==================== OUTPUT FORMATTING ====================
     
     def format_report_card(self, result: EvaluationResult, student_name: str) -> str:
-        """Generate simplified report card"""
+        """Generate enhanced report card with taxonomy details"""
+        
+        tier1_verbs = ', '.join(result.components.verb_tiers.get('tier_1', [])[:3]) or "None"
+        tier2_verbs = ', '.join(result.components.verb_tiers.get('tier_2', [])[:3]) or "None"
+        
+        connector_types = ', '.join(result.components.connector_types.keys()) or "None"
         
         report = f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TVODE REPORT CARD
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+┌────────────────────────────────────────────────────────┐
+  TVODE REPORT CARD v2.0 (Enhanced with Option A)
+└────────────────────────────────────────────────────────┘
 Student: {student_name}
-Score: {result.total_points:.1f}/25 ({result.overall_score:.1f}/5)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Score: {result.total_points:.1f}/25 ({result.overall_score:.2f}/5)
+────────────────────────────────────────────────────────
 
 Sub-Metrics:
-  SM1 (Component Presence):  {result.sm1_score}/5
+  SM1 (Component Presence):  {result.sm1_score}/5  [Ceiling: {result.ceiling}]
   SM2 (Density Performance): {result.sm2_score}/5
   SM3 (Cohesion Performance): {result.sm3_score}/5
 
-One-Line Summary:
-  {result.feedback['sm1']} {result.feedback['sm2']}
+Component Quality:
+  Verb Quality: {result.components.verb_quality_score:.1f} pts
+    - Tier 1 (Critical): {tier1_verbs}
+    - Tier 2 (Moderate): {tier2_verbs}
+  
+  Detail Quality: {result.components.detail_score}/5 ({result.components.detail_quality})
+  
+  Effect Quality: {result.components.effect_quality_score:.1f} pts
+  
+  Connector Types: {connector_types}
 
-One-Line Correction:
+One-Line Summary:
+  {result.feedback['sm1']}
+
+Next Steps:
   {result.feedback['sm1_next']}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+────────────────────────────────────────────────────────
 """
         return report
+    
+    def export_json(self, result: EvaluationResult, student_name: str, assignment: str) -> Dict:
+        """Export evaluation as JSON with full taxonomy data"""
+        
+        return {
+            "student": student_name,
+            "assignment": assignment,
+            "scores": {
+                "sm1": result.sm1_score,
+                "sm2": result.sm2_score,
+                "sm3": result.sm3_score,
+                "overall": result.overall_score,
+                "total_points": result.total_points,
+                "ceiling": result.ceiling
+            },
+            "components": {
+                "topics": result.components.topics[:10],
+                "verbs": result.components.verbs[:10],
+                "objects": result.components.objects[:10],
+                "detail_count": len(result.components.details),
+                "effect_count": len(result.components.effects),
+                "detail_quality": result.components.detail_quality,
+                "detail_score": result.components.detail_score,
+                "verb_quality_score": result.components.verb_quality_score,
+                "effect_quality_score": result.components.effect_quality_score,
+                "verb_tiers": {k: len(v) for k, v in result.components.verb_tiers.items()},
+                "effect_tiers": {k: len(v) for k, v in result.components.effect_tiers.items()},
+                "connector_types": list(result.components.connector_types.keys())
+            },
+            "feedback": result.feedback
+        }
 
 
 # ==================== TESTING FUNCTION ====================
 
 def test_evaluator():
-    """Test the evaluator with Coden's Week 4 transcript"""
+    """Test the enhanced evaluator with Week 4 transcripts"""
     
-    # Coden's corrected transcript
-    transcript = {
+    # Coden's Week 4 transcript (clean version)
+    coden_data = {
         "student_name": "Coden",
         "assignment": "Week 4",
-        "transcription": """# Week 4 Homework
+        "transcription": """Week 4 Homework
 
-## Third person point of view:
+Third person point of view.
+In Chapter 11, Lowry uses third person limited point of view to make the reader question how the giver feels when transmitting the memory since the descriptions are limited on Jonas. In "He breathed again, feeling the sharp intake of frigid air." "He could feel cold air swirling around his entire body." All of these description are limited on Jonas and none of them are about The Giver. This third person limited point of view therefore, leave a mystery about The Giver behind in this story.
 
-In Chapter 11, Lowry uses third person limited point of view to make the reader question how the Giver feels when transmitting the memory since the description are limited on Jonas. "He breathed again, feeling the sharp intake of frigid air." "He could feel cold air swirling around his entire body." All of these description are limited on Jonas and none of them are about "The Giver". This third person limited point of view therefore, leave a mystery about 'The Giver' behind in this story.
-
-## Reliable narrator:
-
-In Chapter 11, Lowry uses reliable narrator to make the readers believe in the process of the transmission of the memory instead of thinking Jonas is drunk and just making stuff up. Jonas had a lot of questions after experiencing the sled, "Why don't we have snow, sled, and 'hills'?" "And when did we, in the past?" And a lot more, normally people would have a lot of questions after experiencing something new. Therefore, this reliable narrator makes the reader to believe Jonas had experienced everything and feel more deep in to the story."""
+Reliable narrator
+In Chapter 11, Lowry uses reliable narrator to make the readers believe in the process of the transmission of memory instead of thinking Jonas is drunk and just making stuff up. Jonas had a lot of questions after experiencing the sled, "why don't we have snow, sled and hills." "And when did we, In the past?" And a lot more, normally people will have a lot of questions after experiencing something new. Therefore, this reliable narrator makes the readers believe Jonas had experienced everything and feel more deep into the story."""
     }
     
     evaluator = TVODEEvaluator()
-    result = evaluator.evaluate(transcript)
+    result = evaluator.evaluate(coden_data)
     
-    # Print results
+    # Print enhanced results
     print("\n" + "="*60)
-    print("PROGRAMMATIC EVALUATION RESULTS")
+    print("ENHANCED OPTION A EVALUATION RESULTS")
     print("="*60)
-    print(f"\nStudent: {transcript['student_name']}")
-    print(f"Assignment: {transcript['assignment']}")
-    print(f"\nScores:")
-    print(f"  SM1: {result.sm1_score}/5 (Ceiling: {result.ceiling})")
-    print(f"  SM2: {result.sm2_score}/5")
-    print(f"  SM3: {result.sm3_score}/5")
-    print(f"  Overall: {result.overall_score:.2f}/5 ({result.total_points:.1f}/25)")
+    print(evaluator.format_report_card(result, coden_data['student_name']))
     
-    print(f"\nComponents Found:")
-    print(f"  Topics: {result.components.topics[:5]}")
-    print(f"  Verbs: {result.components.verbs[:5]}")
-    print(f"  Objects: {result.components.objects[:5]}")
-    print(f"  Details: {len(result.components.details)} items")
-    print(f"  Effects: {len(result.components.effects)} items")
-    print(f"  Detail Quality: {result.components.detail_quality}")
-    
-    print(f"\nFeedback:")
-    for key, value in result.feedback.items():
-        print(f"  {key}: {value}")
-    
-    print("\n" + evaluator.format_report_card(result, transcript['student_name']))
+    # Export JSON
+    json_output = evaluator.export_json(result, coden_data['student_name'], coden_data['assignment'])
+    print("\nJSON Output Preview:")
+    print(json.dumps(json_output, indent=2)[:800] + "...")
 
 
 if __name__ == "__main__":
