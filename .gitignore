@@ -18,3 +18,4 @@ __pycache__/
 outputs/transcripts/*.json
 outputs/evaluations/*.json
 outputs/report_cards/*.txt
+outputs/

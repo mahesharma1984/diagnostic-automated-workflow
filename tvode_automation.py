@@ -46,7 +46,9 @@ class TVODEAutomation:
                        image_path,  # Can be string or list
                        student_name: str,
                        assignment: str,
-                       skip_review: bool = False) -> Dict:
+                       skip_review: bool = False,
+                       kernel_path: str = None,
+                       reasoning_path: str = None) -> Dict:
         """Process a single student submission through complete pipeline
         
         Args:
@@ -77,7 +79,7 @@ class TVODEAutomation:
         
         # Stage 3: Evaluation
         print("\n[Stage 3/4] Evaluating...")
-        eval_result = self._evaluate_transcript(transcript_result)
+        eval_result = self._evaluate_transcript(transcript_result, kernel_path=kernel_path, reasoning_path=reasoning_path)
         
         # Save evaluation
         eval_path = self._save_evaluation(eval_result, transcript_result)
@@ -142,8 +144,14 @@ class TVODEAutomation:
         
         return transcript
     
-    def _evaluate_transcript(self, transcript: TranscriptionResult) -> EvaluationResult:
-        """Evaluate transcription against v3.3 rubric"""
+    def _evaluate_transcript(self, transcript: TranscriptionResult, kernel_path: str = None, reasoning_path: str = None) -> EvaluationResult:
+        """Evaluate transcription against v3.3 rubric
+        
+        Args:
+            transcript: Transcription result
+            kernel_path: Optional path to kernel JSON file
+            reasoning_path: Optional path to reasoning markdown file
+        """
         
         # Convert to format expected by evaluator
         transcript_json = {
@@ -152,8 +160,8 @@ class TVODEAutomation:
             'transcription': transcript.transcription
         }
         
-        # Run evaluation
-        result = self.evaluator.evaluate(transcript_json)
+        # Run evaluation with optional context
+        result = self.evaluator.evaluate(transcript_json, kernel_path=kernel_path, reasoning_path=reasoning_path)
         
         print(f"\n✓ Evaluation complete")
         print(f"  SM1: {result.sm1_score}/5 (ceiling {result.ceiling})")
@@ -335,6 +343,10 @@ def main():
     # Output
     parser.add_argument('--output', default='./outputs', help='Output directory')
     
+    # Context files (optional)
+    parser.add_argument('--kernel', help='Path to kernel JSON file')
+    parser.add_argument('--reasoning', help='Path to reasoning markdown file')
+    
     args = parser.parse_args()
     
     # Initialize automation
@@ -350,7 +362,9 @@ def main():
             image_path=args.image,
             student_name=args.student,
             assignment=args.assignment,
-            skip_review=args.skip_review
+            skip_review=args.skip_review,
+            kernel_path=args.kernel,
+            reasoning_path=args.reasoning
         )
     
     # Batch mode

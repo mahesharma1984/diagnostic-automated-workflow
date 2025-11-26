@@ -175,6 +175,180 @@ class TVODEEvaluator:
         for tier_name, tier_data in self.ANALYTICAL_VERBS.items():
             for verb in tier_data['verbs']:
                 self.all_verbs[verb] = (tier_name, tier_data['weight'], tier_data['label'])
+        
+        # Kernel/reasoning context storage
+        self.kernel_devices = {}  # device_name -> device data
+        self.reasoning_context = {}  # device_name -> reasoning excerpt
+        self.macro_pattern = ""  # Text's overall macro pattern
+        
+        # Normalized device lookup cache
+        self.normalized_device_map = {}  # normalized_name -> original_name
+    
+    def _normalize_device_name(self, device_name: str) -> str:
+        """Normalize device name for fuzzy matching
+        
+        Removes punctuation, lowercases, removes common suffixes
+        
+        Examples:
+            "Third-Person Limited Point of View" → "third person limited"
+            "Reliable Narrator" → "reliable narrator"
+            "Free Indirect Discourse" → "free indirect discourse"
+        """
+        
+        # Lowercase
+        normalized = device_name.lower()
+        
+        # Remove common suffixes that students add
+        suffixes_to_remove = [
+            'point of view',
+            'pov',
+            'narrative',
+            'narration',
+            'device',
+            'technique',
+            'structure'
+        ]
+        
+        for suffix in suffixes_to_remove:
+            if normalized.endswith(' ' + suffix) or normalized.endswith(suffix):
+                normalized = normalized.replace(suffix, '').strip()
+        
+        # Remove punctuation (hyphens, periods, commas)
+        import string
+        translator = str.maketrans('', '', string.punctuation)
+        normalized = normalized.translate(translator)
+        
+        # Collapse multiple spaces
+        normalized = ' '.join(normalized.split())
+        
+        return normalized
+    
+    # Common device name aliases
+    DEVICE_ALIASES = {
+        # POV variations
+        'first person': 'first-person narration',
+        'second person': 'second-person narration', 
+        'third person': 'third-person limited',
+        'third person omniscient': 'third-person omniscient',
+        'pov': 'third-person limited',  # Default assumption
+        
+        # Narrator types
+        'reliable narrator': 'reliable narrator',
+        'unreliable narrator': 'unreliable narrator',
+        
+        # Common abbreviations
+        'fid': 'free indirect discourse',
+        'stream of consciousness': 'stream of consciousness',
+    }
+    
+    def _apply_aliases(self, device_name: str) -> str:
+        """Apply common device name aliases"""
+        normalized = self._normalize_device_name(device_name)
+        # Check if normalized form matches an alias
+        for alias_key, alias_value in self.DEVICE_ALIASES.items():
+            if normalized == self._normalize_device_name(alias_key):
+                return alias_value
+        return device_name
+    
+    def _fuzzy_match_device(self, student_device: str) -> Tuple[str, float]:
+        """Fuzzy match student's device name to kernel device
+        
+        Returns:
+            (matched_device_name, confidence_score) or (None, 0.0) if no match
+        """
+        
+        if not self.kernel_devices:
+            return None, 0.0
+        
+        # Try alias first
+        aliased = self._apply_aliases(student_device)
+        if aliased != student_device:
+            student_device = aliased  # Use alias for matching
+        
+        student_lower = student_device.lower().strip()
+        
+        # STRATEGY 1: Exact match (100% confidence)
+        if student_lower in self.kernel_devices:
+            return student_lower, 1.0
+        
+        # STRATEGY 2: Normalized match (95% confidence)
+        student_normalized = self._normalize_device_name(student_device)
+        if student_normalized in self.normalized_device_map:
+            matched = self.normalized_device_map[student_normalized]
+            return matched, 0.95
+        
+        # STRATEGY 3: Partial word match (variable confidence)
+        student_words = set(student_normalized.split())
+        if len(student_words) == 0:
+            return None, 0.0
+        
+        best_match = None
+        best_confidence = 0.0
+        
+        for normalized_name, original_name in self.normalized_device_map.items():
+            kernel_words = set(normalized_name.split())
+            
+            # Calculate word overlap
+            overlap = student_words & kernel_words
+            overlap_ratio = len(overlap) / max(len(student_words), len(kernel_words))
+            
+            # Require at least 50% overlap and minimum 2 words matching
+            if overlap_ratio > best_confidence and len(overlap) >= 2:
+                best_match = original_name
+                best_confidence = overlap_ratio * 0.9  # Scale down for partial match
+        
+        if best_confidence >= 0.5:  # 50% threshold
+            return best_match, best_confidence
+        
+        return None, 0.0
+    
+    def load_kernel_context(self, kernel_path: str):
+        """Load device definitions from kernel JSON"""
+        with open(kernel_path, 'r') as f:
+            kernel = json.load(f)
+        
+        # Extract devices
+        for device in kernel.get('micro_devices', []):
+            device_name = device.get('name', '')
+            device_name_lower = device_name.lower()
+            
+            # Store with lowercase key
+            self.kernel_devices[device_name_lower] = {
+                'definition': device.get('definition', ''),
+                'function': device.get('function', ''),
+                'classification': device.get('classification', ''),
+                'macro_role': device.get('macro_role', ''),  # How it serves macro pattern
+                'original_name': device_name  # Store original for display
+            }
+            
+            # Build normalized lookup cache
+            normalized = self._normalize_device_name(device_name)
+            self.normalized_device_map[normalized] = device_name_lower
+        
+        # Extract macro pattern
+        macro_pattern_data = kernel.get('macro_pattern', {})
+        if isinstance(macro_pattern_data, dict):
+            self.macro_pattern = macro_pattern_data.get('description', '')
+        elif isinstance(macro_pattern_data, str):
+            self.macro_pattern = macro_pattern_data
+        
+        print(f"✓ Loaded {len(self.kernel_devices)} devices from kernel")
+    
+    def load_reasoning_context(self, reasoning_path: str):
+        """Load device reasoning from markdown doc"""
+        with open(reasoning_path, 'r') as f:
+            content = f.read()
+        
+        # Extract device sections (look for ## Device Name or ### Device Name)
+        device_pattern = r'###?\s+(.+?)\n(.+?)(?=\n###?|\Z)'
+        matches = re.findall(device_pattern, content, re.DOTALL)
+        
+        for device_name, reasoning_text in matches:
+            device_name_clean = device_name.strip().lower()
+            # Store first 300 chars of reasoning
+            self.reasoning_context[device_name_clean] = reasoning_text[:300].strip()
+        
+        print(f"✓ Loaded reasoning for {len(self.reasoning_context)} devices")
     
     # ==================== COMPONENT EXTRACTION ====================
     
@@ -646,15 +820,313 @@ class TVODEEvaluator:
         
         return int(errors)
     
+    # ==================== DEVICE IDENTIFICATION ====================
+    
+    def _identify_student_device(self, text: str, topics: List[str]) -> str:
+        """Identify which device student is analyzing using fuzzy matching"""
+        
+        if not self.kernel_devices:
+            return None
+        
+        text_lower = text.lower()
+        
+        # STEP 1: Check topics first (most reliable source)
+        for topic in topics:
+            topic_clean = topic.lower().strip()
+            
+            # Skip very short topics (likely not device names)
+            if len(topic_clean) < 4:
+                continue
+            
+            # Try fuzzy match
+            matched_device, confidence = self._fuzzy_match_device(topic_clean)
+            
+            if matched_device and confidence >= 0.5:
+                print(f"  [Device Match] Found '{matched_device}' from topic '{topic_clean}' (confidence: {confidence:.2f})")
+                return matched_device
+        
+        # STEP 2: Check for multi-word device names in topics
+        # Combine consecutive topics that might form device name
+        if len(topics) >= 2:
+            for i in range(len(topics) - 1):
+                combined = f"{topics[i]} {topics[i+1]}".lower().strip()
+                matched_device, confidence = self._fuzzy_match_device(combined)
+                
+                if matched_device and confidence >= 0.7:  # Higher threshold for combined
+                    print(f"  [Device Match] Found '{matched_device}' from combined topics '{combined}' (confidence: {confidence:.2f})")
+                    return matched_device
+        
+        # STEP 3: Search for device names anywhere in text
+        for kernel_device in self.kernel_devices.keys():
+            device_normalized = self._normalize_device_name(kernel_device)
+            
+            # Check if normalized device appears in text
+            if device_normalized in text_lower or kernel_device in text_lower:
+                print(f"  [Device Match] Found '{kernel_device}' in text body")
+                return kernel_device
+        
+        # STEP 4: Try fuzzy matching on longer phrases in text
+        # Extract potential device references (e.g., "uses X to", "employs Y when")
+        device_patterns = [
+            r'uses?\s+([a-z\s]{8,40}?)\s+(?:to|when|in|where)',
+            r'employs?\s+([a-z\s]{8,40}?)\s+(?:to|when|in|where)',
+            r'through\s+(?:the\s+use\s+of\s+)?([a-z\s]{8,40}?)\s+(?:to|when|in|where)',
+        ]
+        
+        for pattern in device_patterns:
+            matches = re.findall(pattern, text_lower)
+            for match in matches:
+                matched_device, confidence = self._fuzzy_match_device(match.strip())
+                if matched_device and confidence >= 0.6:
+                    print(f"  [Device Match] Found '{matched_device}' from pattern match '{match}' (confidence: {confidence:.2f})")
+                    return matched_device
+        
+        return None
+    
+    def _get_device_context(self, device_name: str) -> Dict:
+        """Get combined kernel + reasoning context for device"""
+        if not device_name:
+            return None
+        
+        context = {}
+        
+        # Add kernel data
+        if device_name in self.kernel_devices:
+            context['kernel'] = self.kernel_devices[device_name]
+        
+        # Add reasoning excerpt
+        if device_name in self.reasoning_context:
+            context['reasoning'] = self.reasoning_context[device_name]
+        
+        # Add macro pattern
+        if self.macro_pattern:
+            context['macro_pattern'] = self.macro_pattern
+        
+        return context if context else None
+    
+    def _detect_implicit_device(self, text: str, components: TVODEComponents) -> Tuple[str, float]:
+        """Detect if student is describing a device without naming it
+        
+        Returns:
+            (device_name, confidence_score) or (None, 0.0) if no match
+        """
+        
+        if not self.kernel_devices:
+            return None, 0.0
+        
+        # If student already named a device, skip
+        if components.topics:
+            for topic in components.topics:
+                topic_lower = topic.lower().strip()
+                if topic_lower in self.kernel_devices:
+                    return None, 0.0  # Already explicit
+                # Also check fuzzy match
+                for device_name in self.kernel_devices.keys():
+                    if topic_lower in device_name or device_name in topic_lower:
+                        return None, 0.0  # Already explicit
+        
+        # Require minimum detail quality to avoid false positives on plot summary
+        if components.detail_score < 2.5:
+            return None, 0.0  # Too vague to detect device
+        
+        # Extract keywords from student's text
+        text_lower = text.lower()
+        student_keywords = set(re.findall(r'\b\w{4,}\b', text_lower))  # Words 4+ chars
+        
+        # Remove common words
+        common_words = {'this', 'that', 'with', 'when', 'where', 'which', 'about',
+                        'being', 'have', 'been', 'were', 'make', 'makes', 'made',
+                        'show', 'shows', 'shown', 'reader', 'readers', 'story',
+                        'chapter', 'lowry', 'jonas', 'giver', 'community', 'everyone'}
+        student_keywords -= common_words
+        
+        # Score each device by keyword overlap
+        device_scores = {}
+        
+        for device_name, device_data in self.kernel_devices.items():
+            device_keywords = set()
+            
+            # Extract keywords from device definition
+            definition = device_data.get('definition', '').lower()
+            device_keywords.update(re.findall(r'\b\w{4,}\b', definition))
+            
+            # Extract keywords from device function
+            function = device_data.get('function', '').lower()
+            device_keywords.update(re.findall(r'\b\w{4,}\b', function))
+            
+            # Extract keywords from macro_role
+            macro_role = device_data.get('macro_role', '').lower()
+            device_keywords.update(re.findall(r'\b\w{4,}\b', macro_role))
+            
+            # Also add device name words
+            device_keywords.update(re.findall(r'\b\w{4,}\b', device_name.lower()))
+            
+            device_keywords -= common_words
+            
+            # Calculate overlap
+            overlap = student_keywords & device_keywords
+            overlap_count = len(overlap)
+            
+            # Confidence score (overlap / student keywords)
+            if len(student_keywords) > 0:
+                confidence = overlap_count / len(student_keywords)
+                device_scores[device_name] = (confidence, overlap)
+        
+        # Get best match
+        if device_scores:
+            best_device = max(device_scores.items(), key=lambda x: x[1][0])
+            device_name, (confidence, overlap_words) = best_device
+            
+            # Only return if confidence > 0.15 (at least 15% keyword overlap)
+            if confidence > 0.15:
+                print(f"  [Implicit Device Detection] {device_name}: {confidence:.2f} confidence")
+                print(f"    Matching keywords: {list(overlap_words)[:5]}")
+                return device_name, confidence
+        
+        return None, 0.0
+    
+    def _generate_device_labeling_example(self, device_name: str, student_text: str) -> str:
+        """Generate feedback showing how to properly label the device
+        
+        Args:
+            device_name: The detected device
+            student_text: Student's original writing
+            
+        Returns:
+            Formatted feedback string
+        """
+        
+        if not device_name or device_name not in self.kernel_devices:
+            return ""
+        
+        device_data = self.kernel_devices[device_name]
+        device_title = device_name.title()
+        
+        # Get device function
+        function = device_data.get('function', 'serves a specific literary purpose')
+        function_short = function[:80] + "..." if len(function) > 80 else function
+        
+        # Extract student's first detail as example
+        student_detail = ""
+        if '"' in student_text:
+            # Find first quoted section
+            match = re.search(r'"([^"]{10,50})', student_text)
+            if match:
+                student_detail = match.group(1)
+        else:
+            # Find first descriptive phrase after "when/where/shows"
+            patterns = [
+                r'when ([^.]{15,60})',
+                r'where ([^.]{15,60})',
+                r'shown when ([^.]{15,60})',
+                r'This was shown when ([^.]{15,60})',
+                r'everyone ([^.]{15,60})',
+                r'jonas ([^.]{15,60})',
+                r'the community ([^.]{15,60})'
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, student_text, re.IGNORECASE)
+                if match:
+                    student_detail = match.group(1).strip()
+                    break
+        
+        # Build example
+        if student_detail:
+            example = f"Lowry uses {device_title} when {student_detail}, which reveals {function_short}"
+        else:
+            example = f"Lowry uses {device_title} to [describe specific moment], which reveals {function_short}"
+        
+        return f"""You're analyzing **{device_title}** without naming it explicitly.
+
+
+
+Device Function: {function_short}
+
+
+
+Proper format:
+
+"{example}"
+
+
+
+Start by naming the device, then connect to its function."""
+    
+    def _check_effect_alignment(self, text: str, device_context: Dict) -> Tuple[bool, str]:
+        """Check if student's effect aligns with device's actual function"""
+        if not device_context:
+            return True, ""  # Can't check without context
+        
+        kernel_data = device_context.get('kernel', {})
+        device_function = kernel_data.get('function', '').lower()
+        macro_role = kernel_data.get('macro_role', '').lower()
+        
+        # Extract student's effects from text
+        effect_patterns = [
+            r'(?:creates?|reveals?|demonstrates?|shows?)\s+(.{10,80})',
+            r'which\s+(.{10,80})',
+            r'therefore\s+(.{10,80})'
+        ]
+        
+        student_effects = []
+        for pattern in effect_patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            student_effects.extend(matches)
+        
+        # Check if any effect mentions device function keywords
+        function_keywords = set(device_function.split()) | set(macro_role.split())
+        function_keywords = {w for w in function_keywords if len(w) > 4}  # Filter short words
+        
+        has_alignment = False
+        for effect in student_effects:
+            effect_words = set(effect.lower().split())
+            if function_keywords & effect_words:  # Intersection
+                has_alignment = True
+                break
+        
+        if not has_alignment:
+            return False, f"Your effects should connect to the device's function: {device_function[:80]}"
+        
+        return True, "Good alignment with device function"
+    
     # ==================== MAIN EVALUATION ====================
     
-    def evaluate(self, transcript_json: Dict) -> EvaluationResult:
-        """Main evaluation pipeline"""
+    def evaluate(self, transcript_json: Dict, kernel_path: str = None, reasoning_path: str = None) -> EvaluationResult:
+        """Main evaluation pipeline
+        
+        Args:
+            transcript_json: Student transcript data
+            kernel_path: Optional path to kernel JSON file
+            reasoning_path: Optional path to reasoning markdown file
+        """
+        
+        # Load context if provided
+        if kernel_path and not self.kernel_devices:
+            self.load_kernel_context(kernel_path)
+        if reasoning_path and not self.reasoning_context:
+            self.load_reasoning_context(reasoning_path)
         
         text = transcript_json.get('transcription', '')
         
         # Step 1: Extract components with enhancements
         components = self.extract_components(text)
+        
+        # Step 1.5: Identify which device student is analyzing
+        student_device = self._identify_student_device(text, components.topics)
+        device_context = self._get_device_context(student_device) if student_device else None
+        
+        # Diagnostic output
+        if student_device:
+            original_name = self.kernel_devices[student_device].get('original_name', student_device)
+            print(f"  ✓ Device identified: {original_name}")
+        else:
+            print(f"  ⚠ No device identified from topics: {components.topics[:5]}")
+        
+        # Step 1.6: Check for implicit device if no explicit device found
+        implicit_device = None
+        implicit_confidence = 0.0
+        if device_context is None:
+            implicit_device, implicit_confidence = self._detect_implicit_device(text, components)
         
         # Step 2: Score SM1 and get ceiling
         sm1_score, ceiling = self.score_sm1(components)
@@ -667,8 +1139,18 @@ class TVODEEvaluator:
         overall = (sm1_score * 0.4 + sm2_score * 0.3 + sm3_score * 0.3)
         total_points = overall * 5
         
-        # Step 5: Generate enhanced feedback
-        feedback = self._generate_feedback(components, sm1_score, sm2_score, sm3_score, text)
+        # Step 5: Generate enhanced feedback with device context
+        feedback = self._generate_feedback(components, sm1_score, sm2_score, sm3_score, text, device_context, implicit_device)
+        feedback['original_text'] = text  # Store for report card
+        
+        # Store detected device (explicit or implicit)
+        if student_device:
+            feedback['detected_device'] = student_device
+            feedback['device_detection_type'] = 'explicit'
+        elif implicit_device and implicit_confidence > 0.15:
+            feedback['detected_device'] = implicit_device
+            feedback['device_detection_type'] = 'implicit'
+            feedback['device_confidence'] = implicit_confidence
         
         return EvaluationResult(
             sm1_score=sm1_score,
@@ -681,52 +1163,111 @@ class TVODEEvaluator:
             ceiling=ceiling
         )
     
-    def _generate_feedback(self, components: TVODEComponents, sm1: float, sm2: float, sm3: float, text: str) -> Dict[str, str]:
-        """Generate enhanced structured feedback with tier information"""
+    def _generate_feedback(self, components: TVODEComponents, sm1: float, sm2: float, sm3: float, text: str, device_context: Dict = None, implicit_device: str = None) -> Dict[str, str]:
+        """Generate contextualized feedback with specific examples from student writing"""
         
         feedback = {}
         
-        # SM1 feedback with tier details
+        # Get counts for all tiers
+        tier1_verbs = components.verb_tiers.get('tier_1', [])
+        tier2_verbs = components.verb_tiers.get('tier_2', [])
+        tier3_verbs = components.verb_tiers.get('tier_3', [])
+        tier1_effects = components.effect_tiers.get('tier_1', [])
+        tier2_effects = components.effect_tiers.get('tier_2', [])
+        tier3_effects = components.effect_tiers.get('tier_3', [])
+        
+        # ==================== SM1 FEEDBACK ====================
+        
+        # Build component presence statement
         present_components = []
         if components.topics: present_components.append("Topic")
-        
-        tier1_verbs = len(components.verb_tiers.get('tier_1', []))
-        tier2_verbs = len(components.verb_tiers.get('tier_2', []))
-        if tier1_verbs > 0 or tier2_verbs > 0:
-            present_components.append(f"Verb (Tier 1: {tier1_verbs}, Tier 2: {tier2_verbs})")
-        
         if components.objects: present_components.append("Object")
         if components.details: present_components.append("Detail")
-        
-        tier1_effects = len(components.effect_tiers.get('tier_1', []))
-        tier2_effects = len(components.effect_tiers.get('tier_2', []))
-        tier3_effects = len(components.effect_tiers.get('tier_3', []))
-        if tier1_effects > 0 or tier2_effects > 0 or tier3_effects > 0:
-            present_components.append(f"Effect (T1: {tier1_effects}, T2: {tier2_effects}, T3: {tier3_effects})")
         
         feedback['sm1'] = f"You have {', '.join(present_components)} components present. "
         feedback['sm1'] += f"Your Details are {components.detail_quality} ({components.detail_score:.2f}/5)."
         
-        # Enhanced next steps based on weaknesses
+        # Build SM1 next steps with TRANSFORMATION EXAMPLES
+        next_steps = []
+        
+        # NEW: Check for implicit device usage
+        if implicit_device and device_context is None:  # Only check if no explicit device found
+            # Generate labeling feedback
+            labeling_feedback = self._generate_device_labeling_example(implicit_device, text)
+            if labeling_feedback:
+                next_steps.append(labeling_feedback)
+                # Override SM1 to note implicit device
+                feedback['sm1'] = f"You have {', '.join(present_components)} components present. Your Details are {components.detail_quality} ({components.detail_score:.2f}/5). ⚠️ You're describing a device without naming it."
+        
+        # Detail quality feedback with transformation showing what's needed
         if components.detail_score < 4.0:
-            feedback['sm1_next'] = "Add specific textual moments with exact quotes or actions instead of general descriptions."
+            # Vague detail → Show what would make it specific/precise
+            if components.details:
+                example_detail = components.details[0][:50]
+                # Show transformation based on what's missing
+                has_quotes = bool(re.search(r'"[^"]+"', text))
+                has_attribution = bool(re.search(r'(?:p\.|page)\s*\d+|chapter\s+\d+', text, re.I))
+                
+                transformation = f'Your detail: "{example_detail}..."'
+                needs = []
+                
+                if not has_quotes:
+                    needs.append("add quotation marks around exact text")
+                if not has_attribution:
+                    needs.append("add chapter/page reference")
+                if not self._explains_what_reveals(text):
+                    needs.append("add 'which reveals...' to show significance")
+                
+                # NEW: Add device-specific guidance
+                if device_context:
+                    device_function = device_context.get('kernel', {}).get('function', '')
+                    if device_function:
+                        needs.append(f"connect to device function: {device_function[:80]}")
+                
+                if needs:
+                    transformation += f" → Transform by: {', '.join(needs)}"
+                    next_steps.append(transformation)
+            else:
+                next_steps.append("Add specific textual moments with exact quotes or actions")
         elif components.detail_score < 4.5:
-            feedback['sm1_next'] = "Add page numbers and more contextual elements (when/why/how/what it reveals)."
-        else:
-            feedback['sm1_next'] = "Excellent detail precision! Maintain this level while expanding analytical depth."
+            next_steps.append("Add page numbers and more contextual elements (when/why/how/what it reveals)")
         
-        # Add verb improvement suggestions
-        if tier1_verbs == 0:
-            feedback['sm1_next'] += f" Try using Tier 1 verbs (reveals, creates, exposes, challenges) instead of Tier 3 verbs (uses, makes, has)."
+        # Verb tier feedback with actual student verbs
+        if len(tier1_verbs) == 0 and len(tier2_verbs) == 0:
+            if len(tier3_verbs) > 0:
+                # Show their actual weak verbs
+                verb_examples = ', '.join(tier3_verbs[:5])
+                verb_guidance = f"Try using Tier 1 verbs (reveals, creates, exposes, challenges) instead of Tier 3 verbs ({verb_examples})"
+                
+                # NEW: Add device-specific verb guidance
+                if device_context:
+                    device_function = device_context.get('kernel', {}).get('function', '').lower()
+                    if 'mask' in device_function or 'conceal' in device_function:
+                        verb_guidance += ". For this device, use verbs like 'masks', 'conceals', 'exposes' to show how it hides truth"
+                    elif 'reveal' in device_function or 'show' in device_function:
+                        verb_guidance += ". For this device, use verbs like 'reveals', 'exposes', 'demonstrates' to show discovery"
+                
+                next_steps.append(verb_guidance)
+            else:
+                next_steps.append("Try using Tier 1 verbs (reveals, creates, exposes, challenges) instead of Tier 3 verbs (uses, makes, has)")
+        elif len(tier1_verbs) == 0:
+            # Has Tier 2 but no Tier 1
+            tier2_examples = ', '.join(tier2_verbs[:3])
+            next_steps.append(f"You use Tier 2 verbs ({tier2_examples}). Push toward Tier 1 (reveals, exposes, demonstrates)")
         
-        # SM2 feedback with quality assessment
+        feedback['sm1_next'] = ". ".join(next_steps) + "." if next_steps else "Continue developing specific textual details."
+        
+        # ==================== SM2 FEEDBACK ====================
+        
+        # Count analytical attempts
         sentences = [s for s in re.split(r'[.!?]+', text) if s.strip()]
         functional_verbs = set()
-        for tier in ['tier_1', 'tier_2']:
-            functional_verbs.update(components.verb_tiers.get(tier, []))
+        functional_verbs.update(tier1_verbs)
+        functional_verbs.update(tier2_verbs)
         
         analytical_count = sum(1 for s in sentences if any(v in s.lower() for v in functional_verbs))
         
+        # Effect quality assessment
         avg_effect_tier = self._calculate_avg_tier(components.effect_tiers)
         
         feedback['sm2'] = f"You make {analytical_count} analytical attempts. "
@@ -735,25 +1276,130 @@ class TVODEEvaluator:
         elif avg_effect_tier >= 0.5:
             feedback['sm2'] += "Your effects focus on reader engagement."
         else:
-            feedback['sm2'] += "Your effects are mostly generic."
+            feedback['sm2'] += "Your effects focus on reader engagement."
         
-        feedback['sm2_next'] = "Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point."
+        # Build SM2 next steps with EFFECT TRANSFORMATION EXAMPLES
+        next_steps_sm2 = []
         
-        # Add effect improvement suggestions
-        if tier1_effects == 0 and tier2_effects == 0:
-            feedback['sm2_next'] += " Push toward meaning production effects: Instead of 'makes readers feel', explain HOW the device reveals/demonstrates deeper meaning."
+        if analytical_count < 3:
+            next_steps_sm2.append("Build more distinct insights - each specific detail should unlock a DIFFERENT analytical point")
         
-        # SM3 feedback with variety tracking
+        # Effect tier improvement with transformation examples
+        if len(tier1_effects) == 0 and len(tier2_effects) == 0:
+            # Show what Tier 2 (meaning production) looks like vs generic
+            if components.topics:
+                device_name = components.topics[0] if components.topics else "the device"
+                tier2_example = f"Instead of generic effects, write: '{device_name} reveals how the community...'" \
+                              f" or '{device_name} demonstrates that language control...'"
+                next_steps_sm2.append(f"Push toward meaning production (Tier 2). {tier2_example}")
+            else:
+                next_steps_sm2.append("Push toward meaning production effects: Instead of 'makes readers feel', explain HOW the device reveals/demonstrates deeper meaning")
+        elif len(tier1_effects) == 0:
+            # Has Tier 2/3 but no Tier 1 (meaning production)
+            tier_examples = tier2_effects[:2] if tier2_effects else tier3_effects[:2]
+            if tier_examples:
+                current_approach = f"Your effects ('{tier_examples[0][:40]}...') focus on reader experience"
+                next_steps_sm2.append(f"{current_approach}. Add a 4th insight: 'demonstrates how power structures...' or 'reveals the system's dependence on...'")
+            else:
+                next_steps_sm2.append("Upgrade to meaning production: explain HOW the device reveals/demonstrates deeper meaning about theme, power, or knowledge")
+        
+        # Device-specific insight guidance (explicit OR implicit)
+        active_device = None
+        if device_context:
+            # Explicit device
+            kernel_data = device_context.get('kernel', {})
+            # Get device name from topics or find it in kernel_devices
+            if components.topics:
+                # Try to match topic to device name
+                for topic in components.topics:
+                    topic_lower = topic.lower().strip()
+                    if topic_lower in self.kernel_devices:
+                        active_device = topic_lower
+                        break
+                    # Try fuzzy match
+                    for dev_name in self.kernel_devices.keys():
+                        if topic_lower in dev_name or dev_name in topic_lower:
+                            active_device = dev_name
+                            break
+                    if active_device:
+                        break
+        elif implicit_device:
+            # Implicit device detected
+            active_device = implicit_device
+        
+        if active_device and len(tier1_verbs) < 2:
+            device_title = active_device.title()
+            device_data = self.kernel_devices.get(active_device, {})
+            macro_role = device_data.get('macro_role', '')
+            
+            if macro_role:
+                # Give specific insight direction
+                next_steps_sm2.append(
+                    f"Your analysis of {device_title} should show how it {macro_role}. "
+                    f"Write: '{device_title} reveals [specific pattern in this text]'"
+                )
+            else:
+                # Fallback
+                function = device_data.get('function', '')[:100]
+                if function:
+                    next_steps_sm2.append(
+                        f"Push toward meaning production. Show how {device_title} functions: {function}..."
+                    )
+        
+        # Check effect-device alignment
+        if device_context:
+            aligned, alignment_msg = self._check_effect_alignment(text, device_context)
+            if not aligned:
+                next_steps_sm2.append(alignment_msg)
+        
+        feedback['sm2_next'] = ". ".join(next_steps_sm2) + "." if next_steps_sm2 else "Build more distinct insights."
+        
+        # ==================== SM3 FEEDBACK ====================
+        
         connector_variety = len(components.connector_types)
         total_connectors = sum(len(conns) for conns in components.connector_types.values())
         grammar_errors = self._detect_grammar_errors(text)
         
-        feedback['sm3'] = f"You use {total_connectors} connectors across {connector_variety} types and have approximately {grammar_errors} grammar issues."
+        # Show actual connector types used
+        if connector_variety > 0:
+            connector_summary = []
+            for conn_type, connectors in list(components.connector_types.items())[:4]:
+                examples = ', '.join(connectors[:3])
+                connector_summary.append(f"{conn_type} ({examples})")
+            
+            feedback['sm3'] = f"You use {total_connectors} connectors across {connector_variety} types: {'; '.join(connector_summary)}. "
+        else:
+            feedback['sm3'] = f"You use {total_connectors} connectors across {connector_variety} types. "
+        
+        feedback['sm3'] += f"Approximately {grammar_errors} grammar issues detected."
+        
+        # Build SM3 next steps with CONNECTOR INSERTION EXAMPLES
+        next_steps_sm3 = []
         
         if connector_variety <= 1:
-            feedback['sm3_next'] = "Use more connector variety: Add contrast words (however, although) and cause-effect words (therefore, thus) alongside addition words."
+            # Show missing connector types
+            missing_types = []
+            if 'contrast' not in components.connector_types:
+                missing_types.append("contrast (however, although, whereas)")
+            if 'cause_effect' not in components.connector_types:
+                missing_types.append("cause-effect (therefore, thus, consequently)")
+            if 'elaboration' not in components.connector_types:
+                missing_types.append("elaboration (which, whereby)")
+            
+            if missing_types:
+                next_steps_sm3.append(f"Add connector variety: {', '.join(missing_types[:2])}")
+            else:
+                next_steps_sm3.append("Use more connector variety across different types")
+        
+        if grammar_errors > 2:
+            next_steps_sm3.append("Focus on reducing grammar issues, especially subject-verb agreement")
+        elif grammar_errors > 0:
+            next_steps_sm3.append("Minor grammar cleanup needed (check subject-verb agreement, apostrophes)")
         else:
-            feedback['sm3_next'] = "Good connector variety! Focus on reducing grammar issues, especially subject-verb agreement."
+            if connector_variety > 1:
+                next_steps_sm3.append("Excellent grammar control! Maintain this cohesion")
+        
+        feedback['sm3_next'] = ". ".join(next_steps_sm3) + "." if next_steps_sm3 else "Good connector variety! Focus on reducing grammar issues, especially subject-verb agreement."
         
         return feedback
     
@@ -791,7 +1437,43 @@ Component Quality:
   
   Connector Types: {connector_types}
 
-One-Line Summary:
+"""
+        
+        # Show device context (explicit or implicit)
+        if hasattr(self, 'kernel_devices') and self.kernel_devices:
+            detected_device = result.feedback.get('detected_device', None)
+            detection_type = result.feedback.get('device_detection_type', 'none')
+            
+            if detected_device:
+                device_data = self.kernel_devices.get(detected_device, {})
+                
+                # Different display for explicit vs implicit
+                if detection_type == 'explicit':
+                    status = "✓ Explicitly Named"
+                elif detection_type == 'implicit':
+                    confidence = result.feedback.get('device_confidence', 0)
+                    status = f"⚠️ Implicit ({confidence:.0%} confidence) - NOT NAMED"
+                else:
+                    status = "Detected"
+                
+                report += f"""
+Device Analysis:
+  Device: {detected_device.title()} [{status}]
+  Function: {device_data.get('function', 'N/A')[:60]}...
+  Macro Role: {device_data.get('macro_role', 'N/A')[:60]}...
+
+"""
+                
+                if detection_type == 'implicit':
+                    report += f"""
+  
+  ⚠️ CRITICAL: You must explicitly name the device!
+  Instead of: "This was shown when..."
+  Write: "Lowry uses {detected_device.title()} when..."
+
+"""
+        
+        report += f"""One-Line Summary:
   {result.feedback['sm1']}
 
 Next Steps:
