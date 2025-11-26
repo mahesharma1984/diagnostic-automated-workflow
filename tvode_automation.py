@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # Import our modules
-from tvode_transcriber import TVODETranscriber, TranscriptionResult
-from tvode_evaluator import TVODEEvaluator, EvaluationResult
+from src.tvode_transcriber import TVODETranscriber, TranscriptionResult
+from src.tvode_evaluator import TVODEEvaluator, EvaluationResult
 
 
 class TVODEAutomation:
