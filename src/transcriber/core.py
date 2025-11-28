@@ -85,147 +85,48 @@ class TVODETranscriber:
         return image_data, media_type
     
     def _build_transcription_prompt(self, student_name: str, assignment: str) -> str:
-        """Build CONSERVATIVE transcription prompt (v2.0 - anti-hallucination)
+        """Build focused transcription prompt (v2.1 - simplified for accuracy)
         
-        This prompt is designed to prevent AI hallucinations by:
-        1. Explicit "do not infer" rules
-        2. Quantified 95% confidence threshold
-        3. [UNCLEAR] marker system for uncertain words
-        4. Self-check protocol
-        5. Concrete examples of correct behavior
+        Key changes from v2.0:
+        - Shorter prompt (20 lines vs 180)
+        - Focus on accuracy over exhaustive rules
+        - Combined with temperature=0 for deterministic output
         """
         
-        prompt = f"""You are transcribing handwritten student work. You are a LITERAL transcription tool, NOT a helpful assistant.
+        return f"""Transcribe this handwritten student work exactly as written.
 
 **Student:** {student_name}
 **Assignment:** {assignment}
 
-═══════════════════════════════════════════════════════════
-CRITICAL RULES (NO EXCEPTIONS):
-═══════════════════════════════════════════════════════════
+RULES:
+1. Transcribe ONLY text you can clearly read - mark unclear words as [UNCLEAR: best_guess/alternative]
+2. COMPLETELY SKIP any crossed-out/strikethrough text (do not include it at all)
+3. Preserve all spelling and grammar errors exactly as the student wrote them
+4. Include the header/title at the top
 
-1. TRANSCRIBE ONLY TEXT WITH 95%+ VISUAL CERTAINTY
-   - If you cannot clearly see each letter → Use [UNCLEAR: context]
-   - If multiple interpretations possible → Use [UNCLEAR: option1/option2]
-   - If word is missing/illegible → Use [MISSING]
+CRITICAL: Do NOT guess or infer unclear words from context. If you can't clearly see each letter, mark it [UNCLEAR].
 
-2. DO NOT USE LANGUAGE UNDERSTANDING TO FILL GAPS
-   - ❌ WRONG: See unclear word, infer from context what "makes sense"
-   - ✅ RIGHT: See unclear word, write [UNCLEAR: surrounding context]
-   
-3. DO NOT USE SEMANTIC REASONING TO CHOOSE ALTERNATIVES
-   - ❌ WRONG: "The word 'culture' fits the sentence flow better than 'future'"
-   - ✅ RIGHT: Flag as [UNCLEAR: culture/future] and let human decide
-
-4. IGNORE ALL CROSSED-OUT TEXT COMPLETELY
-   - If you see a line through text → Skip it entirely, do not transcribe
-   - If uncertain whether crossed out → Flag as [STRIKETHROUGH?: text]
-
-5. PRESERVE ALL STUDENT ERRORS EXACTLY
-   - Grammar errors → Keep them exactly as written
-   - Spelling errors → Keep them exactly as written
-   - Punctuation errors → Keep them exactly as written
-   - Missing words → Do NOT add them
-
-═══════════════════════════════════════════════════════════
-EXAMPLES OF CORRECT BEHAVIOR:
-═══════════════════════════════════════════════════════════
-
-Example 1: UNCLEAR WORD
-Student writes unclear word between "Jonas takes" and "apple"
-❌ BAD:  "Jonas takes the apple" (guessing "the")
-✅ GOOD: "Jonas takes [UNCLEAR: word before apple] apple"
-
-Example 2: MULTIPLE INTERPRETATIONS
-Student's handwriting could be "third" or "sled"
-❌ BAD:  "make his third ride" (choosing contextually fitting word)
-✅ GOOD: "make his [UNCLEAR: third/sled] ride"
-
-Example 3: CONTEXTUAL INFERENCE
-Paragraph about specialness, unclear word after "special"
-❌ BAD:  "special culture" (inferring from paragraph theme)
-✅ GOOD: "special [UNCLEAR: culture/future/feature]"
-
-Example 4: CROSSED-OUT TEXT
-Student wrote "allow readers make" with "allow readers" crossed out
-❌ BAD:  "allow readers make the reader question" (including strikethrough)
-✅ GOOD: "make the reader question" (strikethrough completely omitted)
-
-Example 5: GRAMMAR ERROR
-Student writes "Jonas think" (missing 's')
-❌ BAD:  "Jonas thinks" (correcting student error)
-✅ GOOD: "Jonas think" (preserving error exactly)
-
-Example 6: MISSING WORD
-Student writes "Jonas to school" (missing "went")
-❌ BAD:  "Jonas went to school" (adding logical word)
-✅ GOOD: "Jonas [MISSING] to school" or "Jonas to school" (preserve as-is)
-
-═══════════════════════════════════════════════════════════
-SELF-CHECK PROTOCOL (USE THIS BEFORE FINALIZING):
-═══════════════════════════════════════════════════════════
-
-For EVERY word you transcribe, ask yourself:
-
-Q1: Can I point to exact pixels forming each letter of this word?
-    → If NO: Use [UNCLEAR]
-
-Q2: Am I using "what would make sense here" to choose this word?
-    → If YES: STOP, mark as [UNCLEAR] instead
-
-Q3: Am I using semantic understanding of the paragraph to fill this gap?
-    → If YES: STOP, you are inferring not transcribing
-
-Q4: Did I check for strikethrough lines over this text?
-    → If UNSURE whether crossed out: Flag as [STRIKETHROUGH?: text]
-
-Q5: Am I correcting student's grammar/spelling because it "should be" correct?
-    → If YES: STOP, preserve error exactly as written
-
-═══════════════════════════════════════════════════════════
-OUTPUT FORMAT:
-═══════════════════════════════════════════════════════════
-
-Return ONLY valid JSON (no markdown, no backticks, no explanatory text):
+OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
 
 {{
-  "transcription": "Full text with [UNCLEAR] and [MISSING] markers preserved in-line...",
+  "transcription": "Full text with [UNCLEAR] markers where needed...",
   "metadata": {{
-    "word_count": 156,
+    "word_count": 123,
     "handwriting_quality": "clear|moderate|difficult",
-    "strikethroughs_present": true,
-    "inserted_text_present": false
+    "strikethroughs_present": true
   }},
   "uncertainties": [
     {{
       "line_number": 5,
-      "context": "...surrounding text showing where unclear word appears...",
+      "context": "...surrounding text...",
       "unclear_word": "[UNCLEAR: option1/option2]",
       "alternatives": ["option1", "option2"],
-      "confidence": "low|medium|high",
-      "reason": "specific visual reason why unclear (e.g., 'letters cramped', 'ink smudge', 'word squeezed above line')"
+      "confidence": "low",
+      "reason": "letters unclear"
     }}
   ],
-  "notes": [
-    "Line 3: crossed out 'axes', replaced with 'cues'",
-    "Line 8: Possible spelling error 'roll' vs 'role' preserved as written",
-    "Line 12: Word squeezed above line but readable"
-  ]
-}}
-
-═══════════════════════════════════════════════════════════
-FINAL REMINDER:
-═══════════════════════════════════════════════════════════
-
-USE [UNCLEAR] LIBERALLY. It is FAR BETTER to flag 20 words as uncertain than to miss 1 hallucination.
-
-Your job is LITERAL TRANSCRIPTION, not helpful completion of student work.
-
-When in doubt → [UNCLEAR]
-
-Return ONLY valid JSON."""
-
-        return prompt
+  "notes": ["any observations about the handwriting"]
+}}"""
     
     def transcribe(self, image_path, student_name: str, assignment: str) -> TranscriptionResult:
         """Transcribe image(s) and return structured result
@@ -320,6 +221,7 @@ Return ONLY valid JSON."""
         response = self.client.messages.create(
             model=self.model,
             max_tokens=4000,
+            temperature=0,  # Deterministic output for transcription accuracy
             messages=[
                 {
                     "role": "user",

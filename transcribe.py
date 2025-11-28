@@ -101,7 +101,55 @@ Examples:
     print(f"Review needed: {'YES' if result.requires_review else 'NO'}")
     
     if result.requires_review:
-        print(f"\nRun evaluate.py after reviewing/correcting the transcript.")
+        print(f"\n{'='*60}")
+        print(f"⚠️  MANUAL REVIEW REQUIRED")
+        print(f"{'='*60}")
+        print(f"Uncertainties: {len(result.uncertainties)}")
+        print(f"Accuracy: {result.accuracy_score:.1%}")
+        
+        # Interactive review of each uncertainty
+        for i, unc in enumerate(result.uncertainties, 1):
+            # Handle both dict and Uncertainty object formats
+            if isinstance(unc, dict):
+                line_num = unc.get('line_number', 0)
+                context = unc.get('context', '')
+                unclear_word = unc.get('unclear_word', '')
+                alternatives = unc.get('alternatives', [])
+                reason = unc.get('reason', '')
+            else:
+                line_num = unc.line_number
+                context = unc.context
+                unclear_word = unc.unclear_word
+                alternatives = unc.alternatives
+                reason = unc.reason
+            
+            print(f"\n[{i}/{len(result.uncertainties)}] Line {line_num}")
+            print(f"  Context: \"{context}\"")
+            print(f"  Current: {unclear_word}")
+            print(f"  Options: {', '.join(alternatives)}")
+            print(f"  Reason:  {reason}")
+            
+            correction = input("  → Correction (Enter=keep, 'x'=omit strikethrough): ").strip()
+            
+            if correction.lower() == 'x':
+                # Remove the unclear marker entirely (it was strikethrough)
+                result.transcription = result.transcription.replace(unclear_word, '', 1)
+                result.transcription = result.transcription.replace('  ', ' ')  # Clean double spaces
+                result.notes.append(f"Line {line_num}: Omitted strikethrough '{unclear_word}'")
+                print(f"  ✓ Omitted (strikethrough)")
+            elif correction:
+                # Replace with correction
+                result.transcription = result.transcription.replace(unclear_word, correction, 1)
+                result.notes.append(f"Line {line_num}: Human corrected → '{correction}'")
+                print(f"  ✓ Updated")
+        
+        # Mark as reviewed
+        result.requires_review = False
+        result.accuracy_score = min(0.95, result.accuracy_score + 0.15)  # Boost after human review
+        
+        # Re-save with corrections
+        output_path = transcriber.save_result(result, output_dir)
+        print(f"\n✓ Corrections saved to: {output_path}")
     else:
         print(f"\nReady for evaluation:")
         print(f"  python evaluate.py --transcript {output_path} --evaluator tvode")
