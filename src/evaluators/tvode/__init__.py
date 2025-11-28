@@ -1,16 +1,9 @@
 """
 TVODE Evaluator Package v3.0
 
-Modular evaluation system for literary analysis.
-
-Usage:
-    from tvode_evaluator import TVODEEvaluator, EvaluationResult
-    
-    evaluator = TVODEEvaluator()
-    evaluator.load_kernel_context('kernels/The_Giver_kernel_v3_4.json')
-    
-    result = evaluator.evaluate({'transcription': student_text})
-    print(result.sm1_score, result.feedback['sm1'])
+Evaluates student literary analysis using TVODE framework:
+- Topic, Verb, Object, Detail, Effect components
+- SM1 (Component Presence), SM2 (Density), SM3 (Cohesion) scoring
 """
 
 from .evaluator import TVODEEvaluator, EvaluationResult
