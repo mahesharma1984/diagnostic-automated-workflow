@@ -1,37 +1,67 @@
 # TVODE Diagnostic Automation System
 
-**Version:** 1.0  
+**Version:** 2.0  
 **Date:** November 2025
 
 Complete automation for transcribing, evaluating, and reporting on student TVODE writing.
 
 ---
 
-## Files Created
+## Architecture
 
-✅ **tvode_transcriber.py** - Transcription with confidence scoring  
-✅ **tvode_evaluator.py** - Programmatic v3.3 rubric implementation  
-✅ **tvode_automation.py** - Complete pipeline orchestrator
+The system is now split into modular CLI scripts:
+
+✅ **transcribe.py** - Stage 1: Image → JSON transcript  
+✅ **evaluate.py** - Stage 2: Transcript → Evaluation  
+✅ **automate.py** - Full pipeline wrapper (transcribe + evaluate)
+
+**New Structure:**
+- `src/transcriber/` - Transcription engine
+- `src/evaluators/` - Evaluator registry (tvode, future evaluators)
+- `src/evaluators/tvode/` - TVODE rubric implementation
 
 ---
 
 ## Quick Start
 
-### Single Student
+### Full Pipeline (Recommended)
 
 ```bash
-python tvode_automation.py \
+python automate.py \
+  --image student_work.jpg \
+  --student "Coden" \
+  --assignment "Week 4" \
+  --evaluator tvode
+```
+
+### Step-by-Step (For Review)
+
+```bash
+# Step 1: Transcribe
+python transcribe.py \
   --image student_work.jpg \
   --student "Coden" \
   --assignment "Week 4"
+
+# Step 2: Review transcript if needed
+# Edit outputs/transcripts/Coden_Week_4_transcript.json
+
+# Step 3: Evaluate
+python evaluate.py \
+  --transcript outputs/transcripts/Coden_Week_4_transcript.json \
+  --evaluator tvode
 ```
 
-### Batch Processing
+### With Kernel Context
 
 ```bash
-python tvode_automation.py \
-  --batch images/*.jpg \
-  --skip-review
+python automate.py \
+  --image student_work.jpg \
+  --student "Coden" \
+  --assignment "Week 4" \
+  --evaluator tvode \
+  --kernel kernels/The_Giver_kernel_v3_4.json \
+  --reasoning reasoning/The_Giver_ReasoningDoc_v3.3.md
 ```
 
 ---
@@ -48,7 +78,7 @@ python tvode_automation.py \
 
 **Output:**
 ```
-transcripts/Coden_Week4_transcript.json
+outputs/transcripts/Coden_Week_4_transcript.json
 ```
 
 **Auto-accept criteria:**
@@ -93,7 +123,8 @@ Section 1 (Line 3):
 
 **Output:**
 ```
-evaluations/Coden_Week4_evaluation.json
+outputs/evaluations/Coden_Week_4_tvode_evaluation.json
+outputs/reports/Coden_Week_4_tvode_report.md
 ```
 
 ---
@@ -118,7 +149,7 @@ ONE-LINE FIX:
 
 **Output:**
 ```
-report_cards/Coden_Week4_report.txt
+outputs/reports/Coden_Week_4_tvode_report.md
 ```
 
 ---
@@ -137,26 +168,28 @@ export ANTHROPIC_API_KEY="your-key-here"
 ### Test Transcription Only
 
 ```bash
-python tvode_transcriber.py
+python transcribe.py \
+  --image student_work.jpg \
+  --student "Test" \
+  --assignment "Test"
 ```
-
-Tests with Coden's Week 4 PDF (if available)
 
 ### Test Evaluation Only
 
 ```bash
-python tvode_evaluator.py
+python evaluate.py \
+  --transcript outputs/transcripts/Coden_Week_4_transcript.json \
+  --evaluator tvode
 ```
-
-Tests with Coden's corrected transcript
 
 ### Test Full Pipeline
 
 ```bash
-python tvode_automation.py \
-  --image /mnt/user-data/uploads/Coden_-_week_4.pdf \
+python automate.py \
+  --image student_work.jpg \
   --student "Coden" \
-  --assignment "Week 4"
+  --assignment "Week 4" \
+  --evaluator tvode
 ```
 
 ---
@@ -192,7 +225,7 @@ python tvode_automation.py \
 
 ### Adjust Confidence Threshold
 
-Edit `tvode_transcriber.py`:
+Edit `src/transcriber/core.py`:
 
 ```python
 def _needs_review(self, uncertainties, handwriting_quality, accuracy_score):
@@ -203,7 +236,7 @@ def _needs_review(self, uncertainties, handwriting_quality, accuracy_score):
 
 ### Modify Scoring Logic
 
-Edit `tvode_evaluator.py`:
+Edit `src/evaluators/tvode/scoring.py`:
 
 ```python
 def score_sm2(self, text, components, ceiling):
@@ -214,12 +247,18 @@ def score_sm2(self, text, components, ceiling):
 
 ### Change Report Format
 
-Edit `tvode_automation.py`:
+Edit `evaluate.py` or `automate.py`:
 
 ```python
-def _generate_report_card(self, eval_result, transcript):
-    # Customize report template here
+# In the report generation section
+report = f"""# Custom Report Format
+...
+"""
 ```
+
+### Add New Evaluator
+
+See main `README.md` for instructions on adding evaluators to the registry.
 
 ---
 
@@ -242,7 +281,7 @@ Claude sometimes wraps JSON in markdown. The transcriber strips this automatical
 ### Scores seem too high/low
 
 1. Compare with manual evaluations on 5-10 samples
-2. Adjust thresholds in `tvode_evaluator.py`
+2. Adjust thresholds in `src/evaluators/tvode/scoring.py`
 3. Check if detail quality assessment matches your judgment
 
 ---
