@@ -134,8 +134,8 @@ Examples:
         if hasattr(evaluator, 'load_kernel_context'):
             evaluator.load_kernel_context(args.kernel)
     
-    # Load reasoning if provided (only for TVODE evaluator)
-    if args.reasoning and args.evaluator != 'thesis':
+    # Load reasoning if provided
+    if args.reasoning:
         if not Path(args.reasoning).exists():
             print(f"ERROR: Reasoning file not found: {args.reasoning}")
             sys.exit(1)
@@ -148,6 +148,7 @@ Examples:
         # Thesis evaluator accepts string directly, with API support
         result = evaluator.evaluate(
             transcription,
+            reasoning_path=args.reasoning,
             use_api=not args.rule_based,  # API is default, unless --rule-based is set
             api_key=args.api_key,
             year_level=year_level

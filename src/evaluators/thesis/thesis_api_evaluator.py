@@ -21,6 +21,144 @@ except ImportError:
     Anthropic = None
 
 
+# ============================================================
+# CONTEXT EXTRACTION
+# ============================================================
+
+def extract_thesis_context(kernel_path: str) -> dict:
+    """
+    Extract book context from kernel for charitable interpretation.
+    
+    Args:
+        kernel_path: Path to kernel JSON file
+    
+    Returns:
+        dict with title, author, plot_arc, narrative_voice, 
+        rhetorical_pattern, key_concepts, devices
+    """
+    
+    with open(kernel_path, 'r') as f:
+        kernel = json.load(f)
+    
+    context = {
+        'title': kernel['metadata']['title'].strip(),
+        'author': kernel['metadata']['author'].strip(),
+    }
+    
+    # Plot arc summaries
+    context['plot_arc'] = {
+        section: kernel['extracts'][section]['rationale'][:250]
+        for section in ['exposition', 'climax', 'resolution']
+    }
+    
+    # Narrative voice
+    voice = kernel['macro_variables']['narrative']['voice']
+    context['narrative_voice'] = {
+        'pov': voice['pov'],
+        'pov_description': voice['pov_description'],
+        'focalization': voice['focalization'],
+    }
+    
+    # Rhetorical pattern
+    rhetoric = kernel['macro_variables']['rhetoric']
+    context['rhetorical_pattern'] = {
+        'alignment_type': rhetoric['structure']['alignment_type'],
+        'primary_mechanism': rhetoric['structure']['primary_mechanism'],
+        'mediation_summary': kernel['macro_variables']['device_mediation']['summary'][:300],
+    }
+    
+    # Devices (for recognition)
+    context['devices'] = [d['name'] for d in kernel['micro_devices']]
+    
+    # Key concepts
+    context['key_concepts'] = _extract_key_concepts(kernel)
+    
+    return context
+
+
+def _extract_key_concepts(kernel: dict) -> list:
+    """Extract key concepts from kernel for fuzzy matching."""
+    
+    concepts = set()
+    
+    # Extract capitalized words from extracts (likely proper nouns)
+    for section, data in kernel['extracts'].items():
+        caps = re.findall(r'\b[A-Z][a-z]+\b', data['rationale'])
+        concepts.update(caps)
+    
+    # Add title and author
+    concepts.add(kernel['metadata']['title'].strip())
+    
+    # Filter common words
+    stopwords = {'The', 'This', 'These', 'Chapter', 'His', 'Her', 'And', 'With'}
+    concepts = [c for c in concepts if c not in stopwords and len(c) > 2]
+    
+    return sorted(concepts)[:25]
+
+
+# ============================================================
+# CONTEXT TEMPLATE
+# ============================================================
+
+TEXT_CONTEXT_TEMPLATE = """
+---
+
+## Text Context: {title} by {author}
+
+### Plot Arc
+- **Exposition:** {exposition}
+- **Climax:** {climax}  
+- **Resolution:** {resolution}
+
+### Narrative Voice
+- **POV:** {pov} — {pov_description}
+- **Focalization:** {focalization} (internal access to protagonist's thoughts)
+
+### Rhetorical Pattern
+- **Alignment:** {alignment_type} (transformative — personal journey = social critique)
+- **Mechanism:** {primary_mechanism} (character development drives meaning)
+
+### Key Concepts (recognize these even if misspelled)
+{key_concepts}
+
+### Devices Used
+{devices}
+
+---
+
+**CRITICAL:** Use this context to CHARITABLY INTERPRET student work.
+- If they reference these concepts (even imprecisely), they're engaging correctly
+- Transcription may have errors — look for IDEAS, not exact phrases
+- Score REASONING QUALITY, not surface accuracy
+"""
+
+
+def build_context_section(context: dict) -> str:
+    """Build the TEXT_CONTEXT section from extracted context."""
+    
+    if not context:
+        return ""
+    
+    return TEXT_CONTEXT_TEMPLATE.format(
+        title=context['title'],
+        author=context['author'],
+        exposition=context['plot_arc'].get('exposition', 'N/A'),
+        climax=context['plot_arc'].get('climax', 'N/A'),
+        resolution=context['plot_arc'].get('resolution', 'N/A'),
+        pov=context['narrative_voice']['pov'],
+        pov_description=context['narrative_voice']['pov_description'],
+        focalization=context['narrative_voice']['focalization'],
+        alignment_type=context['rhetorical_pattern']['alignment_type'],
+        primary_mechanism=context['rhetorical_pattern']['primary_mechanism'],
+        key_concepts=', '.join(context.get('key_concepts', [])),
+        devices=', '.join(context.get('devices', [])[:12]),
+    )
+
+
+# ============================================================
+# YEAR LEVEL EXPECTATIONS
+# ============================================================
+
 def get_dcceps_expectations(year_level: int) -> dict:
     """
     Return DCCEPS expectations for year level
@@ -82,81 +220,103 @@ def score_dcceps_relative(layer: int, year_level: int) -> float:
         return 4.0
 
 
+def load_reasoning_context(reasoning_path: str) -> str:
+    """Load reasoning doc and format as context for prompt injection."""
+    
+    with open(reasoning_path, 'r') as f:
+        r = json.load(f)
+    
+    # Safely extract values with fallbacks
+    voice = r.get('thesis_slots', {}).get('voice_label', 'N/A')
+    theme = r.get('roadmap_slots', {}).get('theme_revealed', 'N/A')
+    conflict = r.get('plot_slots', {}).get('conflict', 'N/A')
+    outcome = r.get('plot_slots', {}).get('outcome', 'N/A')
+    device_1 = r.get('thesis_slots', {}).get('device_1', 'N/A')
+    device_2 = r.get('thesis_slots', {}).get('device_2', 'N/A')
+    
+    return f"""
+
+## Book Context (use for charitable interpretation)
+
+**Expected Voice:** {voice}
+**Expected Theme:** {theme}
+**Character Arc:** {conflict} → {outcome}
+**Key Devices:** {device_1}, {device_2}
+
+**Concepts to recognize (even if misspelled):**
+- Jonas, Sameness, memories, Gabriel, Elsewhere, release
+- transformation, awakening, conformity, individuality
+- responsibility, emotions, family, identity
+
+**INSTRUCTION:** If student text matches these concepts (even garbled), 
+they are engaging correctly. Score REASONING, not transcription accuracy.
+"""
+
+
 THESIS_RUBRIC_PROMPT = """
-## DCCEPS Thesis Rubric
+## Thesis Evaluation Rubric (Interpretive)
 
 ### Position Assessment
-Determine what position the student CONCLUDES with (not just mentions):
+Determine what position the student CONCLUDES with. Be charitable:
 
-- **Strong:** "I believe...", "It is clear that...", "Jonas is definitely...", explicit stance
-- **Moderate:** "I think...", "In my opinion...", "It seems that..."
-- **Hedged:** "Maybe...", "Perhaps...", "Could be...", "might be considered..."
-- **Implicit:** Position inferrable but not directly stated
+- **Clear:** Student explicitly states or strongly implies a position
+- **Implicit:** Position inferrable from argument direction  
+- **Unclear:** Cannot determine what student is arguing
 
-**CRITICAL:** Counter-argument sections acknowledge the OTHER side but don't represent the student's position.
-- "Although Jonas shows heroism..." followed by "his suffering outweighs..." → Position is VICTIM
-- "While he is a victim..." followed by "his actions prove heroism" → Position is HERO
-- Look at FINAL conclusion and weighing language ("outweighs", "more than", "ultimately")
+**IMPORTANT:** 
+- Counter-arguments acknowledge OTHER side but don't represent student's position
+- Look at FINAL conclusion and overall argument direction
+- Transcription errors may obscure phrasing — interpret the IDEAS
 
-### DCCEPS Layers (Critical - read carefully)
+### DCCEPS Layers (Reasoning Depth)
 
-| Layer | Name | Description | Example |
-|-------|------|-------------|---------|
-| 1 | Definition | Just states position | "Jonas is a victim" |
-| 2 | Comparison | Distinguishes alternatives | "MORE victim THAN hero because..." |
-| 3 | Cause-Effect | Shows HOW evidence supports | "BECAUSE X, he experienced Y, WHICH CAUSED Z" |
-| 4 | Problem-Solution | Frames authorial PURPOSE | "The text positions Jonas as victim IN ORDER TO critique..." |
+| Layer | Name | What to Look For |
+|-------|------|------------------|
+| 1 | Definition | Just states what happens, labels character |
+| 2 | Comparison | Distinguishes alternatives (more X than Y) |
+| 3 | Cause-Effect | Shows HOW/WHY (because, therefore, which leads to) |
+| 4 | Problem-Solution | Frames authorial purpose (in order to show) |
 
-**Layer Detection Rules:**
-- Layer 1: Position stated, no reasoning
-- Layer 2: Uses comparison language (more/less than, rather than, instead of)
-- Layer 3: Uses causal language (because, therefore, which caused, as a result, this led to)
-- Layer 4: Uses purpose language (in order to, so that, to show, the author uses X to)
+**Note:** Look for REASONING PATTERNS, not exact keywords. A student showing 
+"memories → feelings → identity change" is doing L3 cause-effect reasoning.
 
-### Evidence Quality
+### Themes and Concepts
+Does the student identify relevant themes?
+- Transformation/awakening
+- Conformity vs individuality  
+- Memory and emotion
+- Responsibility and growth
 
-- **Specific:** Direct quotes with attribution - "Jonas says 'why don't we have snow?'"
-- **Paraphrased:** References specific scenes - "when Jonas asks about snow"
-- **General:** Vague references - "in the book...", "Jonas shows..."
-- **Missing:** No textual support, pure assertion
+### Device Awareness
+Did they mention any literary devices? Imprecise mentions count:
+- "third person" = Third Person Limited ✓
+- "we see through Jonas" = focalization ✓
 
-**IMPORTANT:** Presence of quotation marks with text content = AT LEAST paraphrased, likely specific.
+### Scoring (Year 7-8 Expectations: L2-L3)
 
-### Counter-Argument Assessment
+**SM1: Position + Theme Identification (40%)**
+- 4.5-5.0: Clear position + multiple themes + device awareness
+- 3.5-4.0: Implicit position + identifies key themes
+- 2.5-3.0: Unclear position + some relevant ideas
+- 1.5-2.0: No position + mostly summary
 
-Does the student acknowledge the OTHER side before dismissing it?
-- Full: "Although Jonas shows heroism in escaping, his suffering throughout outweighs this"
-- Partial: Brief mention of alternative without engagement
-- None: Only argues one side
+**SM2: Reasoning Depth (30%)**
+- 4.5-5.0: L3+ with multiple reasoning chains
+- 3.5-4.0: L3 cause-effect OR strong L2
+- 2.5-3.0: L2 comparison only
+- 1.5-2.0: L1 definition only
 
-### Synthesis Assessment
+**SM3: Argument Coherence (30%)**
+Do ideas connect logically? (NOT grammar accuracy)
+- 4.0-5.0: Clear arc, ideas build on each other
+- 3.0-4.0: Ideas connect, structure visible
+- 2.0-3.0: Loose connections
+- 1.0-2.0: Incoherent
 
-Does conclusion WEIGH evidence rather than just restate position?
-- Strong: "Therefore, when we consider X, Y, and Z together, it's clear that..."
-- Moderate: Returns to position with some new insight
-- Weak: Just restates opening position
-- None: No conclusion or abrupt ending
-
-### Scoring Ceilings (SM1 determines ceiling for SM2/SM3)
-
-| Evidence Quality | SM1 Score | Ceiling |
-|-----------------|-----------|---------|
-| Missing | 1.0-1.5 | 2.0 |
-| General | 2.0-2.5 | 3.0 |
-| Paraphrased | 3.0-3.5 | 4.0 |
-| Specific (quotes) | 4.0-5.0 | 5.0 |
-
-**SM2 (DCCEPS Layer):**
-- Layer 4 + specific evidence: 4.5-5.0
-- Layer 3 + specific evidence: 3.5-4.0
-- Layer 2 + paraphrased: 2.5-3.0
-- Layer 1 only: 1.5-2.0
-
-**SM3 (Coherence):**
-- Counter-arg + synthesis + flow: 4.5-5.0
-- Synthesis OR counter-arg: 3.0-4.0
-- Basic flow only: 2.0-3.0
-- Contradictions or no structure: 1.0-2.0
+**CRITICAL:** 
+- Transcription artifacts are NOT student errors
+- Surface grammar errors don't reduce score if meaning is clear
+- Evidence quality informs FEEDBACK, not score ceiling
 """
 
 
@@ -216,9 +376,11 @@ Note the detected mode in feedback. Students are developing this skill.
 
 
 THESIS_EVALUATION_PROMPT = """
-You are evaluating a student's argumentative writing about whether Jonas (from The Giver) is more hero or victim.
+You are evaluating a Year {year_level} student's thesis writing.
 
 {rubric}
+
+{text_context}
 
 ---
 
@@ -228,80 +390,55 @@ You are evaluating a student's argumentative writing about whether Jonas (from T
 
 ---
 
-## Pre-Extracted Signals (for reference only - use your judgment)
-
-Evidence items found: {evidence_count}
-Reasoning patterns detected: {reasoning_types}
-Counter-argument signals: {counter_signals}
-Synthesis markers present: {has_synthesis}
-
----
-
 ## Your Task
 
-1. **Determine Position** - What position does the student CONCLUDE with?
-   - Look at their FINAL argument, not just word counts
-   - Counter-argument sections acknowledge the other side but don't represent the student's position
-   - "Although X... but Y" means Y is their position
-   - Weighing language ("outweighs", "more than") indicates final position
+**CHARITABLY INTERPRET the student's argument.** 
 
-2. **Assess DCCEPS Layer** - How sophisticated is the reasoning?
-   - Layer 1: Just labels (Definition) - "Jonas is a victim"
-   - Layer 2: Compares alternatives (Comparison) - "more victim than hero"
-   - Layer 3: Shows cause-effect chains (Cause-Effect) - "because X, which caused Y"
-   - Layer 4: Frames authorial purpose (Problem-Solution) - "to show that..."
-
-3. **Score SM1** (Position + Evidence) → This sets the ceiling
-   - Check: Does student include EXACT QUOTES from the text?
-   - If YES (quotes in quotation marks): Evidence is specific (ceiling 4.5-5.0)
-   - If paraphrased (references scenes without quotes): ceiling 4.0
-   - If general descriptions only: ceiling 3.0
-   - If no evidence: ceiling 2.0
-
-4. **Score SM2** (Reasoning Depth) WITHIN the ceiling
-   - Based on DCCEPS layer reached
-   - Cannot exceed SM1 ceiling
-
-5. **Score SM3** (Argument Coherence) WITHIN the ceiling
-   - Counter-argument acknowledgment
-   - Synthesis quality
-   - Cannot exceed SM1 ceiling
-
-6. **Generate feedback** - Specific to their writing, positive framing
+1. **Determine Position** — What are they arguing? Look past errors to find the claim.
+2. **Assess DCCEPS Layer** — What level of reasoning? Look for patterns, not keywords.
+3. **Identify Themes** — Which themes do they engage with?
+4. **Check Device Awareness** — Any literary devices mentioned?
+5. **Score Reasoning Quality** — Do ideas connect logically?
 
 ---
 
-## Output Format (JSON only, no markdown code blocks)
+Respond with JSON only:
 
 {{
-  "position": "hero|victim|both_acknowledged|unclear",
-  "position_strength": "strong|moderate|hedged|implicit",
-  "position_reasoning": "<one sentence explaining how you determined position>",
+  "position": "hero|victim|transformation|both|unclear",
+  "position_strength": "strong|moderate|implicit",
+  "position_reasoning": "brief explanation",
   
-  "dcceps_layer": <1-4>,
+  "dcceps_layer": 1-4,
   "dcceps_label": "Definition|Comparison|Cause-Effect|Problem-Solution",
-  "dcceps_reasoning": "<one sentence explaining layer assessment>",
+  "dcceps_reasoning": "what reasoning patterns detected",
+  
+  "themes_identified": ["theme1", "theme2"],
+  "devices_mentioned": ["device1"],
+  "charitable_interpretation": "What the student is actually arguing",
+  
+  "sm1_score": 1.0-5.0,
+  "sm2_score": 1.0-5.0,
+  "sm3_score": 1.0-5.0,
+  "ceiling": 4.5,
+  "overall_score": 1.0-5.0,
+  "total_points": 5.0-25.0,
   
   "evidence_quality": "specific|paraphrased|general|missing",
-  "has_counter_argument": <true|false>,
-  "has_synthesis": <true|false>,
-  
-  "sm1_score": <float 1.0-5.0>,
-  "sm2_score": <float, must be <= ceiling from SM1>,
-  "sm3_score": <float, must be <= ceiling from SM1>,
-  "ceiling": <float based on evidence quality>,
+  "has_counter_argument": true/false,
+  "has_synthesis": true/false,
   
   "feedback": {{
-    "sm1": "<what's working with position/evidence>",
-    "sm1_next": "<one concrete improvement for evidence>",
-    "sm2": "<what's working with reasoning>",
-    "sm2_next": "<one concrete improvement - how to reach next DCCEPS layer>",
-    "sm3": "<what's working with structure>",
-    "sm3_next": "<one concrete improvement for coherence>",
-    "dcceps_guidance": "<specific advice on reaching next layer>",
-    "stage1_integration": "<weak|moderate|strong> - <brief note on device/voice/structure mentions>",
-    "alignment_mode": "narrative|structure|voice|unclear",
-    "alignment_mode_note": "<guidance on developing this further>"
+    "sm1": "what's working",
+    "sm1_next": "next step",
+    "sm2": "what's working",
+    "sm2_next": "next step", 
+    "sm3": "what's working",
+    "sm3_next": "next step",
+    "dcceps_guidance": "how to reach next layer",
+    "stage1_integration": "weak|moderate|strong - note on device usage",
+    "alignment_mode": "narrative|structure|voice",
+    "alignment_mode_note": "observation about organization"
   }}
 }}
 """
@@ -311,16 +448,20 @@ def evaluate_thesis_with_api(
     text: str,
     components=None,
     api_key: Optional[str] = None,
-    year_level: int = 8
+    year_level: int = 8,
+    kernel_path: Optional[str] = None,
+    reasoning_path: Optional[str] = None
 ) -> Dict:
     """
-    Evaluate thesis using Claude API
+    Evaluate thesis using Claude API with context injection.
     
     Args:
         text: Student's argumentative writing
         components: Pre-extracted ThesisComponents (optional, for context)
         api_key: Anthropic API key (or use ANTHROPIC_API_KEY env var)
         year_level: Student year level (7-12, default: 8)
+        kernel_path: Path to kernel JSON for context injection
+        reasoning_path: Path to reasoning doc JSON for charitable interpretation
     
     Returns:
         Dict with position, dcceps_layer, scores, feedback
@@ -332,6 +473,25 @@ def evaluate_thesis_with_api(
     key = api_key or os.environ.get('ANTHROPIC_API_KEY')
     if not key:
         raise ValueError("ANTHROPIC_API_KEY not set. Set environment variable or pass api_key parameter.")
+    
+    # Load reasoning context if provided
+    book_context = ""
+    if reasoning_path:
+        try:
+            book_context = load_reasoning_context(reasoning_path)
+            print(f"  ✓ Loaded reasoning context")
+        except Exception as e:
+            print(f"  ⚠ Could not load reasoning context: {e}")
+    
+    # Extract text context if kernel provided
+    text_context = ""
+    if kernel_path:
+        try:
+            context = extract_thesis_context(kernel_path)
+            text_context = build_context_section(context)
+            print(f"  ✓ Loaded context for: {context['title']}")
+        except Exception as e:
+            print(f"  ⚠ Could not load kernel context: {e}")
     
     # Extract component info for context (if provided)
     if components is not None:
@@ -366,12 +526,10 @@ def evaluate_thesis_with_api(
     
     # Build prompt
     prompt = THESIS_EVALUATION_PROMPT.format(
-        rubric=full_rubric,
+        rubric=full_rubric + book_context,
+        text_context=text_context,
         text=text,
-        evidence_count=evidence_count,
-        reasoning_types=reasoning_types,
-        counter_signals=counter_signals,
-        has_synthesis=has_synthesis
+        year_level=year_level
     )
     
     # Call API
@@ -412,12 +570,13 @@ def evaluate_thesis_with_api(
         result['ceiling'] = max(result.get('ceiling', 3.0), 4.0)
         result['sm1_score'] = max(result.get('sm1_score', 2.5), 3.5)
     
-    # Enforce ceiling logic
+    # SOFT ceiling enforcement (not hard)
     ceiling = result.get('ceiling', 5.0)
-    if result.get('sm2_score', 0) > ceiling:
-        result['sm2_score'] = ceiling
-    if result.get('sm3_score', 0) > ceiling:
-        result['sm3_score'] = ceiling
+    # Only enforce if way over — evidence quality is soft for thesis
+    if result.get('sm2_score', 0) > ceiling + 1.0:
+        result['sm2_score'] = ceiling + 0.5
+    if result.get('sm3_score', 0) > ceiling + 1.0:
+        result['sm3_score'] = ceiling + 0.5
     
     # Post-API validation: Override SM2 with year-relative scoring
     detected_layer = result.get('dcceps_layer', 2)

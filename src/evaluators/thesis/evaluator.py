@@ -110,7 +110,14 @@ class ThesisEvaluator:
         if use_api:
             try:
                 from .thesis_api_evaluator import evaluate_thesis_with_api
-                api_result = evaluate_thesis_with_api(text, components, api_key, year_level=year_level)
+                api_result = evaluate_thesis_with_api(
+                    text, 
+                    components=components, 
+                    api_key=api_key, 
+                    year_level=year_level,
+                    kernel_path=kernel_path,
+                    reasoning_path=reasoning_path
+                )
                 
                 # Use API results for scores and assessments
                 return ThesisEvaluationResult(
