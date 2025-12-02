@@ -6,11 +6,12 @@ Add new evaluators here.
 """
 
 from .tvode import TVODEEvaluator
+from .thesis import ThesisEvaluator
 
 # Registry: name -> evaluator class
 EVALUATORS = {
     'tvode': TVODEEvaluator,
-    # 'dcceps': DCCEPSEvaluator,  # Add when ready
+    'thesis': ThesisEvaluator,
 }
 
 def get_evaluator(name: str):

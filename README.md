@@ -61,21 +61,35 @@ diagnostic-automated-workflow/
 │   │
 │   └── evaluators/        # Evaluator registry
 │       ├── __init__.py    # Registry: get_evaluator(), list_evaluators()
-│       └── tvode/         # TVODE rubric evaluator
-│           ├── evaluator.py
-│           ├── components.py
-│           ├── scoring.py
-│           ├── feedback.py
-│           ├── taxonomies.py
-│           └── device_context.py
+│       ├── tvode/         # TVODE rubric evaluator
+│       │   ├── evaluator.py      # Main evaluator class
+│       │   ├── api_evaluator.py  # API-based evaluation (default)
+│       │   ├── components.py     # Component extraction
+│       │   ├── scoring.py        # Rule-based scoring logic
+│       │   ├── feedback.py      # Feedback generation
+│       │   ├── taxonomies.py    # Rubric taxonomies
+│       │   └── device_context.py # Device context handling
+│       │
+│       └── thesis/        # DCCEPS-based thesis evaluator
+│           ├── __init__.py
+│           ├── evaluator.py           # Main evaluator class
+│           ├── thesis_components.py   # Component extraction
+│           ├── thesis_scoring.py      # Scoring logic
+│           ├── thesis_feedback.py     # Feedback generation
+│           └── thesis_taxonomies.py   # DCCEPS patterns and taxonomies
+│
+├── tests/
+│   └── test_thesis_evaluator.py  # Comprehensive tests for thesis evaluator
 │
 ├── outputs/
 │   ├── transcripts/       # JSON transcripts from Stage 1
 │   ├── evaluations/       # JSON evaluations from Stage 2
-│   └── reports/           # Markdown report cards
+│   ├── reports/           # Markdown report cards
+│   └── report_cards/     # Text report cards
 │
 ├── kernels/               # Device context files (optional)
-└── reasoning/             # Reasoning documents (optional)
+├── reasoning/            # Reasoning documents (optional)
+└── student_work/         # Student work images (by week)
 ```
 
 ## CLI Commands
@@ -101,7 +115,7 @@ python transcribe.py \
 
 ### `evaluate.py`
 
-Evaluates a transcript against a rubric.
+Evaluates a transcript against a rubric. Uses API-based evaluation by default for higher accuracy.
 
 ```bash
 python evaluate.py \
@@ -109,7 +123,9 @@ python evaluate.py \
   --evaluator tvode \
   [--kernel kernels/The_Giver.json] \
   [--reasoning reasoning/The_Giver_ReasoningDoc.md] \
-  [--output ./outputs]
+  [--output ./outputs] \
+  [--rule-based]  # Use rule-based instead of API-based
+  [--api-key sk-ant-...]  # Custom API key
 ```
 
 **Output:**
@@ -117,7 +133,12 @@ python evaluate.py \
 - `outputs/reports/{student}_{assignment}_{evaluator}_report.md`
 
 **Available evaluators:**
-- `tvode` - TVODE rubric v3.3 implementation
+- `tvode` - TVODE rubric v3.3 implementation (API-based by default, rule-based fallback available)
+- `thesis` - DCCEPS-based thesis evaluator for argumentative writing assessment
+
+**Evaluation modes:**
+- **API-based (default)**: Uses Claude API for more accurate, nuanced scoring
+- **Rule-based**: Uses programmatic rules (faster, lower cost, less accurate)
 
 ### `automate.py`
 
@@ -140,6 +161,16 @@ The system uses a registry pattern for evaluators, making it easy to add new rub
 ### Available Evaluators
 
 - **tvode**: TVODE rubric v3.3 (Component Presence, Density, Cohesion)
+  - Supports both API-based and rule-based evaluation
+  - Includes device context detection and fuzzy matching
+  - Generates detailed feedback and report cards
+
+- **thesis**: DCCEPS-based thesis evaluator
+  - Evaluates argumentative/thesis writing (e.g., "Is Jonas more hero or victim?")
+  - Assesses position clarity, evidence quality, and reasoning depth
+  - Detects DCCEPS layers (1-4): Definition → Comparison → Cause-Effect → Problem-Solution
+  - Generates layer-specific feedback for progression
+  - Available via CLI: `--evaluator thesis`
 
 ### Adding a New Evaluator
 
@@ -217,9 +248,15 @@ The system uses a registry pattern for evaluators, making it easy to add new rub
 ## Cost Estimates
 
 **Per student (single image):**
-- Transcription: ~$0.05-0.15
-- Evaluation: ~$0.10-0.30
-- **Total: ~$0.15-0.45 per student**
+- Transcription: ~$0.05-0.15 (depending on image size)
+- Evaluation (API-based): ~$0.10-0.30 (includes full rubric context)
+- Evaluation (rule-based): ~$0.00 (no API calls)
+- **Total (API-based): ~$0.15-0.45 per student**
+- **Total (rule-based): ~$0.05-0.15 per student**
+
+**Multi-page documents:**
+- Add ~$0.05-0.15 per additional page for transcription
+- Evaluation cost remains the same (single combined evaluation)
 
 ## Troubleshooting
 
@@ -232,8 +269,13 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ```bash
 # Verify structure
 python3 -c "from src.evaluators import list_evaluators; print(list_evaluators())"
-# Should print: ['tvode']
+# Should print: ['tvode', 'thesis']
 ```
+
+### Evaluation Mode Selection
+- By default, `evaluate.py` uses API-based evaluation for better accuracy
+- Use `--rule-based` flag for faster, lower-cost rule-based evaluation
+- API-based evaluation provides more nuanced scoring and better feedback
 
 ### Review Needed
 If transcription requires review, edit the JSON file manually, then run `evaluate.py` separately.
@@ -241,6 +283,27 @@ If transcription requires review, edit the JSON file manually, then run `evaluat
 ## Development
 
 See `README_AUTOMATION.md` for detailed pipeline documentation and customization options.
+
+### Testing
+
+Test individual components:
+```bash
+# Test transcription
+python transcribe.py --image student_work.jpg --student "Test" --assignment "Test"
+
+# Test evaluation
+python evaluate.py --transcript outputs/transcripts/Coden_Week_4_transcript.json --evaluator tvode
+
+# Test full pipeline
+python automate.py --image student_work.jpg --student "Coden" --assignment "Week 4" --evaluator tvode
+```
+
+### Recent Updates
+
+- **API-based evaluation**: TVODE evaluator now defaults to API-based evaluation for improved accuracy
+- **Multi-page support**: Transcribe multiple pages in a single command
+- **Modular architecture**: Separated transcription and evaluation stages for better workflow control
+- **Device context**: Automatic device detection and fuzzy matching for kernel context
 
 ## License
 
