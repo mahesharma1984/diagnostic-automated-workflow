@@ -11,8 +11,8 @@ Parallel to TVODEEvaluator but focused on argumentative structure rather than
 analytical sentence structure.
 """
 
-from dataclasses import dataclass
-from typing import Dict, Union
+from dataclasses import dataclass, field
+from typing import Dict, Union, Optional
 
 from .thesis_components import ThesisComponents, extract_thesis_components
 from .thesis_scoring import (
@@ -41,6 +41,15 @@ class ThesisEvaluationResult:
     # Components and feedback
     components: ThesisComponents
     feedback: Dict[str, str]
+    
+    # API-specific fields (optional, populated when use_api=True)
+    position: Optional[str] = None  # API-determined position
+    position_strength: Optional[str] = None  # API-determined strength
+    position_reasoning: Optional[str] = None  # API explanation
+    dcceps_reasoning: Optional[str] = None  # API explanation
+    evidence_quality: Optional[str] = None  # API-determined quality
+    has_counter_argument: Optional[bool] = None  # API assessment
+    has_synthesis: Optional[bool] = None  # API assessment
 
 
 class ThesisEvaluator:
@@ -70,7 +79,10 @@ class ThesisEvaluator:
         self, 
         text: Union[str, Dict],
         kernel_path: str = None,
-        reasoning_path: str = None
+        reasoning_path: str = None,
+        use_api: bool = True,
+        api_key: Optional[str] = None,
+        year_level: int = 8
     ) -> ThesisEvaluationResult:
         """
         Main evaluation pipeline
@@ -79,6 +91,9 @@ class ThesisEvaluator:
             text: Student's argumentative writing (string) or dict with 'transcription' key
             kernel_path: Optional (not used for thesis evaluation)
             reasoning_path: Optional (not used for thesis evaluation)
+            use_api: If True, use Claude API for scoring (recommended, default: True)
+            api_key: Anthropic API key (or use ANTHROPIC_API_KEY env var)
+            year_level: Student year level (7-12, default: 8)
         
         Returns:
             ThesisEvaluationResult with scores, DCCEPS layer, components, feedback
@@ -86,24 +101,54 @@ class ThesisEvaluator:
         
         # Handle both string and dict inputs for compatibility
         if isinstance(text, dict):
+            year_level = text.get('year_level', year_level)  # Extract from dict if present
             text = text.get('transcription', '')
         
-        # Step 1: Extract thesis components
+        # Always extract components (rule-based) - provides context for API
         components = extract_thesis_components(text)
         
+        if use_api:
+            try:
+                from .thesis_api_evaluator import evaluate_thesis_with_api
+                api_result = evaluate_thesis_with_api(text, components, api_key, year_level=year_level)
+                
+                # Use API results for scores and assessments
+                return ThesisEvaluationResult(
+                    sm1_score=api_result['sm1_score'],
+                    sm2_score=api_result['sm2_score'],
+                    sm3_score=api_result['sm3_score'],
+                    overall_score=api_result['overall_score'],
+                    total_points=api_result['total_points'],
+                    ceiling=api_result['ceiling'],
+                    dcceps_layer=api_result['dcceps_layer'],
+                    dcceps_label=api_result['dcceps_label'],
+                    components=components,
+                    feedback=api_result['feedback'],
+                    # API-specific fields
+                    position=api_result.get('position'),
+                    position_strength=api_result.get('position_strength'),
+                    position_reasoning=api_result.get('position_reasoning'),
+                    dcceps_reasoning=api_result.get('dcceps_reasoning'),
+                    evidence_quality=api_result.get('evidence_quality'),
+                    has_counter_argument=api_result.get('has_counter_argument'),
+                    has_synthesis=api_result.get('has_synthesis')
+                )
+            except ImportError as e:
+                print(f"  ⚠ API unavailable ({e}), falling back to rule-based")
+            except Exception as e:
+                print(f"  ⚠ API error ({e}), falling back to rule-based")
+        
+        # Fallback: rule-based scoring (existing code)
         print(f"  ✓ Position: {components.position} ({components.position_strength})")
         print(f"  ✓ Evidence quality: {components.evidence_quality}")
         print(f"  ✓ DCCEPS Layer: {components.dcceps_layer} ({components.dcceps_label})")
         
-        # Step 2: Score
         sm1_score, ceiling = score_thesis_sm1(components, text)
         sm2_score = score_thesis_sm2(components, text, ceiling)
         sm3_score = score_thesis_sm3(components, text, ceiling)
         
-        # Step 3: Calculate overall
         overall, total_points = calculate_overall_thesis_score(sm1_score, sm2_score, sm3_score)
         
-        # Step 4: Generate feedback
         feedback = generate_thesis_feedback(components, sm1_score, sm2_score, sm3_score, text)
         
         # Add metadata

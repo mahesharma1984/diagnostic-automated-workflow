@@ -52,6 +52,7 @@ class TranscriptionResult:
     accuracy_score: float  # 0.0-1.0
     requires_review: bool
     notes: List[str]
+    year_level: int = 8  # Student year level (7-12, default: 8)
 
 
 class TVODETranscriber:
@@ -128,11 +129,14 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
   "notes": ["any observations about the handwriting"]
 }}"""
     
-    def transcribe(self, image_path, student_name: str, assignment: str) -> TranscriptionResult:
+    def transcribe(self, image_path, student_name: str, assignment: str, year_level: int = 8) -> TranscriptionResult:
         """Transcribe image(s) and return structured result
         
         Args:
             image_path: Single path string or list of paths for multi-page documents
+            student_name: Student's name
+            assignment: Assignment name
+            year_level: Student year level (7-12, default: 8)
         """
         
         # Handle single or multiple images
@@ -195,7 +199,8 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
             uncertainties=all_uncertainties,
             accuracy_score=accuracy_score,
             requires_review=requires_review,
-            notes=all_notes
+            notes=all_notes,
+            year_level=year_level
         )
         
         print(f"\n✓ All pages transcribed")

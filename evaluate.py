@@ -81,6 +81,12 @@ Examples:
         '--api-key',
         help='Anthropic API key (optional, can also use ANTHROPIC_API_KEY env var)'
     )
+    parser.add_argument(
+        '--year-level',
+        type=int,
+        default=8,
+        help='Student year level for DCCEPS expectations (7-12, default: 8)'
+    )
     
     args = parser.parse_args()
     
@@ -101,9 +107,11 @@ Examples:
     student_name = transcript_data.get('student_name', 'Unknown')
     assignment = transcript_data.get('assignment', 'Unknown')
     transcription = transcript_data.get('transcription', '')
+    year_level = transcript_data.get('year_level', args.year_level)  # Use transcript value or CLI arg
     
     print(f"Student: {student_name}")
     print(f"Assignment: {assignment}")
+    print(f"Year Level: {year_level}")
     print(f"Words: {len(transcription.split())}")
     
     # Get evaluator
@@ -137,8 +145,13 @@ Examples:
     # Run evaluation
     # Handle different evaluator interfaces
     if args.evaluator == 'thesis':
-        # Thesis evaluator accepts string directly
-        result = evaluator.evaluate(transcription)
+        # Thesis evaluator accepts string directly, with API support
+        result = evaluator.evaluate(
+            transcription,
+            use_api=not args.rule_based,  # API is default, unless --rule-based is set
+            api_key=args.api_key,
+            year_level=year_level
+        )
     else:
         # TVODE evaluator expects dict with additional params
         result = evaluator.evaluate(

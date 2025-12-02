@@ -53,6 +53,12 @@ Examples:
         help='Assignment name (e.g., "Week 4")'
     )
     parser.add_argument(
+        '--year-level', 
+        type=int, 
+        default=8,
+        help='Student year level (7-12, default: 8)'
+    )
+    parser.add_argument(
         '--output', 
         default='./outputs/transcripts',
         help='Output directory (default: ./outputs/transcripts)'
@@ -84,7 +90,8 @@ Examples:
     result = transcriber.transcribe(
         image_path=image_path,
         student_name=args.student,
-        assignment=args.assignment
+        assignment=args.assignment,
+        year_level=args.year_level
     )
     
     # Save result
