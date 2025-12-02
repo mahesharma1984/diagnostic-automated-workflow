@@ -63,6 +63,11 @@ Examples:
         default='./outputs/transcripts',
         help='Output directory (default: ./outputs/transcripts)'
     )
+    parser.add_argument(
+        '--context',
+        default='Essay about The Giver by Lois Lowry',
+        help='Domain context to help disambiguate unclear words (default: The Giver)'
+    )
     
     args = parser.parse_args()
     
@@ -91,7 +96,8 @@ Examples:
         image_path=image_path,
         student_name=args.student,
         assignment=args.assignment,
-        year_level=args.year_level
+        year_level=args.year_level,
+        context=args.context
     )
     
     # Save result

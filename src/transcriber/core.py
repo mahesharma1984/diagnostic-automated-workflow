@@ -21,10 +21,12 @@ import os
 import sys
 import json
 import base64
+import io
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from anthropic import Anthropic
+from PIL import Image, ImageEnhance, ImageFilter
 
 
 @dataclass
@@ -85,19 +87,194 @@ class TVODETranscriber:
         
         return image_data, media_type
     
-    def _build_transcription_prompt(self, student_name: str, assignment: str) -> str:
+    def _preprocess_image(self, image_path: str, enhancement_level: str = "auto") -> tuple[str, str]:
+        """Preprocess image to improve transcription accuracy.
+        
+        Args:
+            image_path: Path to original image
+            enhancement_level: "none", "light", "moderate", "aggressive", or "auto"
+        
+        Returns:
+            Tuple of (base64_data, media_type) for preprocessed image
+        """
+        # Load image
+        img = Image.open(image_path)
+        
+        # Convert to RGB if necessary (handles RGBA, palette images)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Auto-detect enhancement level based on image properties
+        if enhancement_level == "auto":
+            enhancement_level = self._detect_enhancement_needed(img)
+        
+        if enhancement_level == "none":
+            return self._encode_image(image_path)
+        
+        # Apply enhancements based on level
+        if enhancement_level in ["light", "moderate", "aggressive"]:
+            # Step 1: Auto-contrast
+            contrast_factor = {"light": 1.2, "moderate": 1.4, "aggressive": 1.6}[enhancement_level]
+            enhancer = ImageEnhance.Contrast(img)
+            img = enhancer.enhance(contrast_factor)
+            
+            # Step 2: Sharpening
+            sharpness_factor = {"light": 1.3, "moderate": 1.6, "aggressive": 2.0}[enhancement_level]
+            enhancer = ImageEnhance.Sharpness(img)
+            img = enhancer.enhance(sharpness_factor)
+            
+            # Step 3: Brightness adjustment (only if image is dark)
+            if enhancement_level in ["moderate", "aggressive"]:
+                # Check average brightness
+                grayscale = img.convert('L')
+                avg_brightness = sum(grayscale.getdata()) / len(list(grayscale.getdata()))
+                if avg_brightness < 128:  # Dark image
+                    brightness_factor = {"moderate": 1.1, "aggressive": 1.2}[enhancement_level]
+                    enhancer = ImageEnhance.Brightness(img)
+                    img = enhancer.enhance(brightness_factor)
+        
+        # Convert to base64
+        buffer = io.BytesIO()
+        img.save(buffer, format='JPEG', quality=95)
+        buffer.seek(0)
+        image_data = base64.standard_b64encode(buffer.read()).decode('utf-8')
+        
+        return image_data, 'image/jpeg'
+    
+    def _detect_enhancement_needed(self, img: Image.Image) -> str:
+        """Analyze image to determine enhancement level needed.
+        
+        Returns: "none", "light", "moderate", or "aggressive"
+        """
+        # Convert to grayscale for analysis
+        grayscale = img.convert('L')
+        pixels = list(grayscale.getdata())
+        
+        # Calculate statistics
+        avg_brightness = sum(pixels) / len(pixels)
+        
+        # Calculate contrast (standard deviation)
+        variance = sum((p - avg_brightness) ** 2 for p in pixels) / len(pixels)
+        std_dev = variance ** 0.5
+        
+        # Decision logic
+        if std_dev > 60 and 80 < avg_brightness < 200:
+            return "none"  # Good contrast and brightness
+        elif std_dev > 45 and 60 < avg_brightness < 220:
+            return "light"  # Slightly low contrast
+        elif std_dev > 30:
+            return "moderate"  # Low contrast
+        else:
+            return "aggressive"  # Very low contrast or problematic image
+    
+    def _assess_image_quality(self, image_path: str) -> dict:
+        """Quick quality assessment before full transcription.
+        
+        Returns dict with:
+            - quality_score: 0.0-1.0
+            - usable: bool
+            - issues: list of detected problems
+            - recommended_enhancement: str
+        """
+        img = Image.open(image_path)
+        
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        issues = []
+        score = 1.0
+        
+        # Check 1: Image size (too small = can't read text)
+        width, height = img.size
+        if width < 800 or height < 600:
+            issues.append(f"Low resolution: {width}x{height}")
+            score -= 0.2
+        
+        # Check 2: Brightness
+        grayscale = img.convert('L')
+        pixels = list(grayscale.getdata())
+        avg_brightness = sum(pixels) / len(pixels)
+        
+        if avg_brightness < 50:
+            issues.append(f"Very dark image: avg brightness {avg_brightness:.0f}/255")
+            score -= 0.3
+        elif avg_brightness < 80:
+            issues.append(f"Dark image: avg brightness {avg_brightness:.0f}/255")
+            score -= 0.15
+        elif avg_brightness > 240:
+            issues.append(f"Overexposed: avg brightness {avg_brightness:.0f}/255")
+            score -= 0.2
+        
+        # Check 3: Contrast
+        variance = sum((p - avg_brightness) ** 2 for p in pixels) / len(pixels)
+        std_dev = variance ** 0.5
+        
+        if std_dev < 20:
+            issues.append(f"Very low contrast: std dev {std_dev:.0f}")
+            score -= 0.3
+        elif std_dev < 35:
+            issues.append(f"Low contrast: std dev {std_dev:.0f}")
+            score -= 0.15
+        
+        # Check 4: Aspect ratio (detect cropping issues)
+        aspect = width / height
+        if aspect > 3 or aspect < 0.3:
+            issues.append(f"Unusual aspect ratio: {aspect:.2f}")
+            score -= 0.1
+        
+        # Determine recommended enhancement
+        if score >= 0.85:
+            enhancement = "none"
+        elif score >= 0.7:
+            enhancement = "light"
+        elif score >= 0.5:
+            enhancement = "moderate"
+        else:
+            enhancement = "aggressive"
+        
+        return {
+            "quality_score": max(0.0, score),
+            "usable": score >= 0.3,
+            "issues": issues,
+            "recommended_enhancement": enhancement,
+            "resolution": f"{width}x{height}",
+            "brightness": avg_brightness,
+            "contrast": std_dev
+        }
+    
+    def _build_transcription_prompt(self, student_name: str, assignment: str, context: str = None) -> str:
         """Build focused transcription prompt (v2.1 - simplified for accuracy)
         
         Key changes from v2.0:
         - Shorter prompt (20 lines vs 180)
         - Focus on accuracy over exhaustive rules
         - Combined with temperature=0 for deterministic output
+        - Added domain context support
         """
+        
+        context_section = f"\n{f'**Context:** {context}' if context else ''}"
+        
+        domain_hint = ""
+        if context and 'Giver' in context:
+            domain_hint = '''
+
+DOMAIN CONTEXT:
+This is an essay about "The Giver" by Lois Lowry. 
+
+Expected terms you may encounter: Jonas, Gabriel (Gabe), The Giver, Receiver, 
+
+Sameness, release, memories, sled, Community, Stirrings, Elsewhere, Old, 
+
+Ceremony of Twelve, Assignments, Family Unit, Nurturing Center.
+
+If an unclear word could be one of these terms, include it in alternatives.
+
+'''
         
         return f"""Transcribe this handwritten student work exactly as written.
 
 **Student:** {student_name}
-**Assignment:** {assignment}
+**Assignment:** {assignment}{context_section}
 
 RULES:
 1. Transcribe ONLY text you can clearly read - mark unclear words as [UNCLEAR: best_guess/alternative]
@@ -106,7 +283,7 @@ RULES:
 4. Include the header/title at the top
 
 CRITICAL: Do NOT guess or infer unclear words from context. If you can't clearly see each letter, mark it [UNCLEAR].
-
+{domain_hint}
 OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
 
 {{
@@ -129,7 +306,7 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
   "notes": ["any observations about the handwriting"]
 }}"""
     
-    def transcribe(self, image_path, student_name: str, assignment: str, year_level: int = 8) -> TranscriptionResult:
+    def transcribe(self, image_path, student_name: str, assignment: str, year_level: int = 8, context: str = None) -> TranscriptionResult:
         """Transcribe image(s) and return structured result
         
         Args:
@@ -137,7 +314,11 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
             student_name: Student's name
             assignment: Assignment name
             year_level: Student year level (7-12, default: 8)
+            context: Optional domain context to help disambiguate unclear words
         """
+        
+        # Store context for use in retry pass
+        self._current_context = context or "Essay about The Giver by Lois Lowry"
         
         # Handle single or multiple images
         if isinstance(image_path, str):
@@ -160,7 +341,7 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         
         for i, path in enumerate(image_paths, 1):
             print(f"\nProcessing page {i}/{len(image_paths)}...")
-            result = self._transcribe_single_page(path, student_name, assignment, page_num=i)
+            result = self._transcribe_single_page(path, student_name, assignment, page_num=i, context=context)
             
             all_transcriptions.append(result['transcription'])
             all_uncertainties.extend(result['uncertainties'])
@@ -177,6 +358,17 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         
         # Combine all pages
         combined_transcription = "\n\n".join(all_transcriptions)
+        
+        # Two-pass: retry unclear sections if any
+        if all_uncertainties and len(all_uncertainties) <= 10:  # Don't retry if too many issues
+            # Use first page for retry (for multi-page, uncertainties are typically on first page)
+            combined_transcription, remaining = self._retry_unclear_sections(
+                image_paths[0],
+                all_uncertainties,
+                combined_transcription,
+                context=self._current_context
+            )
+            all_uncertainties = remaining
         
         # Calculate accuracy score
         accuracy_score = self._calculate_accuracy_score(
@@ -212,14 +404,27 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         
         return result
     
-    def _transcribe_single_page(self, image_path: str, student_name: str, assignment: str, page_num: int) -> dict:
+    def _transcribe_single_page(self, image_path: str, student_name: str, assignment: str, page_num: int, context: str = None) -> dict:
         """Transcribe a single page"""
         
-        # Encode image
-        image_data, media_type = self._encode_image(image_path)
+        # Assess image quality
+        quality = self._assess_image_quality(image_path)
+        print(f"  Image quality: {quality['quality_score']:.0%} ({quality['recommended_enhancement']} enhancement)")
+        
+        if not quality['usable']:
+            raise ValueError(f"Image quality too low for transcription: {', '.join(quality['issues'])}")
+        
+        if quality['issues']:
+            print(f"  Issues detected: {', '.join(quality['issues'])}")
+        
+        # Preprocess image based on quality assessment
+        image_data, media_type = self._preprocess_image(
+            image_path, 
+            enhancement_level=quality['recommended_enhancement']
+        )
         
         # Build prompt
-        prompt = self._build_transcription_prompt(student_name, assignment)
+        prompt = self._build_transcription_prompt(student_name, assignment, context=context)
         prompt += f"\n\n**This is page {page_num} of the assignment.**"
         
         # Call Claude API
@@ -406,6 +611,116 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         output += f"{'═'*60}\n"
         
         return output
+    
+    def _retry_unclear_sections(self, 
+                                image_path: str, 
+                                uncertainties: List[dict],
+                                original_transcription: str,
+                                context: str = None) -> tuple[str, List[dict]]:
+        """Second pass: retry transcription of unclear sections with focused prompts.
+        
+        Args:
+            image_path: Path to image
+            uncertainties: List of uncertainty dicts from first pass
+            original_transcription: Full transcription with [UNCLEAR] markers
+            context: Optional domain context
+        
+        Returns:
+            Tuple of (updated_transcription, remaining_uncertainties)
+        """
+        if not uncertainties:
+            return original_transcription, []
+        
+        print(f"\n  Second pass: retrying {len(uncertainties)} unclear sections...")
+        
+        remaining_uncertainties = []
+        updated_transcription = original_transcription
+        
+        for unc in uncertainties:
+            unclear_word = unc.get('unclear_word', '')
+            context_text = unc.get('context', '')
+            alternatives = unc.get('alternatives', [])
+            
+            # Build focused retry prompt
+            retry_prompt = f"""Look carefully at this handwritten text. I need you to focus on ONE unclear word.
+
+CONTEXT FROM SURROUNDING TEXT:
+
+"{context_text}"
+
+THE UNCLEAR WORD appears where you see [UNCLEAR] in the context above.
+Previous attempt suggested these alternatives: {', '.join(alternatives)}
+
+{f"DOMAIN HINT: This is about 'The Giver' by Lois Lowry. The word might be: Jonas, Gabriel, Giver, Sameness, release, memories, sled, Community, etc." if context and 'Giver' in context else ""}
+
+TASK: Look at the actual handwriting in the image. What does this word say?
+
+RESPOND WITH ONLY:
+
+- The word if you can read it with 90%+ confidence
+
+- "[STILL_UNCLEAR: option1/option2]" if still uncertain
+
+- "[ILLEGIBLE]" if truly unreadable
+
+NO OTHER TEXT. Just the word or marker."""
+
+            # Encode with aggressive enhancement for retry
+            image_data, media_type = self._preprocess_image(image_path, enhancement_level="aggressive")
+            
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=100,
+                    temperature=0,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
+                            {"type": "text", "text": retry_prompt}
+                        ]
+                    }]
+                )
+                
+                result = response.content[0].text.strip()
+                
+                # Clean response - extract just the word, not explanations
+                if '\n' in result:
+                    result = result.split('\n')[0].strip()
+                
+                # Check for common explanation phrases
+                explanation_phrases = [
+                    "looking at", "i can see", "the word is", "it appears", 
+                    "based on", "appears to be", "seems to be", "i believe"
+                ]
+                result_lower = result.lower()
+                if any(phrase in result_lower for phrase in explanation_phrases):
+                    print(f"    Retry returned explanation, skipping")
+                    remaining_uncertainties.append(unc)
+                    continue
+                
+                # If response is too long, it's an explanation not a word
+                if len(result.split()) > 5:
+                    print(f"    Retry returned explanation, skipping")
+                    remaining_uncertainties.append(unc)
+                    continue
+                
+                # Strip any trailing punctuation or quotes
+                result = result.strip('."\'*')
+                
+                if result.startswith("[STILL_UNCLEAR") or result.startswith("[ILLEGIBLE"):
+                    # Still unclear, keep in list
+                    remaining_uncertainties.append(unc)
+                else:
+                    # Got a clear answer, replace in transcription
+                    updated_transcription = updated_transcription.replace(unclear_word, result, 1)
+                    print(f"    Resolved: {unclear_word} → {result}")
+                    
+            except Exception as e:
+                print(f"    Retry failed for '{unclear_word}': {e}")
+                remaining_uncertainties.append(unc)
+        
+        return updated_transcription, remaining_uncertainties
 
 
 def test_transcriber():
