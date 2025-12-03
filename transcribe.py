@@ -74,6 +74,10 @@ Examples:
         default='vision',
         help='OCR engine: "vision" (Google Cloud Vision, default) or "claude" (fallback)',
     )
+    parser.add_argument(
+        '--kernel',
+        help='Path to kernel JSON for character/term normalization',
+    )
     
     args = parser.parse_args()
     
@@ -105,6 +109,7 @@ Examples:
         year_level=args.year_level,
         context=args.context,
         ocr_engine=args.ocr_engine,
+        kernel_path=args.kernel,
     )
     
     # Save result

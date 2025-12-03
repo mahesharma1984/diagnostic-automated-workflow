@@ -29,6 +29,56 @@ from anthropic import Anthropic
 from PIL import Image, ImageEnhance, ImageFilter
 
 
+def extract_context_from_kernel(kernel_path: str) -> dict:
+    """Extract character names, terms, and devices from kernel for OCR normalization.
+    
+    Args:
+        kernel_path: Path to kernel JSON file
+        
+    Returns:
+        dict with characters, terms, devices, title, author
+    """
+    import json as _json
+
+    with open(kernel_path, "r") as f:
+        kernel = _json.load(f)
+
+    # Extract characters from artifact_1 (character taxonomy)
+    characters: List[str] = []
+    if "artifact_1" in kernel:
+        for char_key, char_data in kernel["artifact_1"].get("characters", {}).items():
+            if isinstance(char_data, dict):
+                characters.append(char_data.get("name", char_key))
+            else:
+                characters.append(char_key)
+
+    # Extract terms from artifact_1 (concepts, places, objects, events)
+    terms: List[str] = []
+    for category in ["concepts", "places", "objects", "events"]:
+        if "artifact_1" in kernel and category in kernel["artifact_1"]:
+            terms.extend(kernel["artifact_1"][category].keys())
+
+    # Extract devices from thesis_slots
+    devices: List[str] = []
+    if "thesis_slots" in kernel:
+        slots = kernel["thesis_slots"]
+        for key in ["voice_label", "device_1", "device_2", "device_3"]:
+            if key in slots and slots[key]:
+                devices.append(slots[key])
+
+    # Get title and author
+    title = kernel.get("metadata", {}).get("title", "")
+    author = kernel.get("metadata", {}).get("author", "")
+
+    return {
+        "characters": characters,
+        "terms": terms,
+        "devices": devices,
+        "title": title,
+        "author": author,
+    }
+
+
 @dataclass
 class Uncertainty:
     """Represents an unclear section needing review"""
@@ -61,11 +111,12 @@ class TranscriptionResult:
     handwriting_quality: str  # "clear", "moderate", "difficult"
     strikethroughs_present: bool
     uncertainties: List[Uncertainty]  # KEEP for backward compatibility
-    sentences_for_review: List[SentenceReview]  # ADD THIS
+    sentences_for_review: List[SentenceReview]  # Sentence-level review items
     accuracy_score: float  # 0.0-1.0
     requires_review: bool
     notes: List[str]
     year_level: int = 8  # Student year level (7-12, default: 8)
+    normalizations_applied: Optional[List[str]] = None  # Tracks book-term normalizations
 
 
 class TVODETranscriber:
@@ -162,26 +213,58 @@ class TVODETranscriber:
         low_confidence_words: list,
         student_name: str,
         assignment: str,
-        context: str = None
+        context: str = None,
+        kernel_context: dict = None,
     ) -> dict:
         """Use Claude to structure raw OCR text and flag uncertain sentences.
         
         Claude does NOT read the image — only processes the OCR text.
         """
+        # Build kernel context section if provided
+        kernel_section = ""
+        if kernel_context:
+            chars = ", ".join(kernel_context.get("characters", [])[:10])
+            terms = ", ".join(kernel_context.get("terms", [])[:15])
+            devices = ", ".join(kernel_context.get("devices", [])[:5])
+            title = kernel_context.get("title", "")
+            author = kernel_context.get("author", "")
+
+            kernel_section = f"""
+## Book Context: {title} by {author}
+
+**Characters (normalize OCR variations to these):**
+{chars}
+
+**Key Terms:**
+{terms}
+
+**Literary Devices:**
+{devices}
+
+NORMALIZATION RULES:
+- If OCR shows "Jong", "Jone", "Janne", "Jones" → normalize to "Jonas"
+- If OCR shows "Gaber", "Gabrel" → normalize to "Gabriel"
+- If OCR shows "Samness" → normalize to "Sameness"
+- If OCR shows "Third Pessa" → normalize to "Third Person"
+- Match any close variations to the character/term lists above
+- Preserve actual student spelling errors (don't normalize non-book words)
+"""
+
         # Build human-readable list of low-confidence words for Claude
         low_conf_list = ", ".join(
             [
                 f"'{w['word']}' ({w['confidence']:.0%})"
                 for w in low_confidence_words[:10]
-                if 'word' in w and 'confidence' in w
+                if "word" in w and "confidence" in w
             ]
         )
-        
+
         prompt = f"""Structure this OCR-extracted student essay text.
 
 **Student:** {student_name}
 **Assignment:** {assignment}
-**Context:** {context or "Essay about The Giver by Lois Lowry"}
+**Context:** {context or "Student essay"}
+{kernel_section}
 
 **Raw OCR text:**
 {raw_text}
@@ -189,28 +272,29 @@ class TVODETranscriber:
 **Low-confidence words from OCR:** {low_conf_list or "None"}
 
 TASKS:
-1. Clean up obvious OCR artifacts (random line breaks, spacing issues)
-2. Preserve all spelling/grammar errors — this is student work
-3. Identify sentences containing low-confidence words — flag for review
-4. Do NOT change words — only fix spacing and line breaks
+1. Clean up OCR artifacts (random line breaks, spacing issues)
+2. Normalize character names and book terms to correct spelling (see Book Context above)
+3. Preserve student spelling/grammar errors for non-book words
+4. Identify sentences with remaining uncertain words
 
 OUTPUT FORMAT — Return ONLY valid JSON:
 
 {{
-  "transcription": "Cleaned text with proper spacing and line breaks...",
+  "transcription": "Cleaned and normalized text...",
   "metadata": {{
     "word_count": 123,
     "handwriting_quality": "clear|moderate|difficult"
   }},
   "sentences_for_review": [
     {{
-      "sentence_text": "Sentence containing uncertain word...",
+      "sentence_text": "Sentence with uncertain words...",
       "line_start": 3,
       "line_end": 4,
       "confidence": 0.75,
-      "reason": "contains low-confidence word 'xyz'"
+      "reason": "contains uncertain word 'xyz'"
     }}
   ],
+  "normalizations_applied": ["Jong → Jonas", "Samness → Sameness"],
   "notes": ["observations"]
 }}"""
         
@@ -451,6 +535,7 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
         year_level: int = 8,
         context: str = None,
         ocr_engine: str = "vision",
+        kernel_path: str = None,
     ) -> TranscriptionResult:
         """Transcribe image(s) and return structured result
         
@@ -461,10 +546,23 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
             year_level: Student year level (7-12, default: 8)
             context: Optional domain context to help disambiguate unclear words
             ocr_engine: "vision" (Google Cloud Vision) or "claude" (fallback)
+            kernel_path: Optional path to kernel JSON for character/term normalization
         """
         
         # Store context for use in retry pass
         self._current_context = context or "Essay about The Giver by Lois Lowry"
+
+        # Load kernel context if provided
+        kernel_context = None
+        if kernel_path:
+            try:
+                kernel_context = extract_context_from_kernel(kernel_path)
+                print(f"  Loaded kernel context: {kernel_context.get('title', 'Unknown')}")
+                chars_preview = ", ".join(kernel_context.get("characters", [])[:5])
+                if chars_preview:
+                    print(f"  Characters: {chars_preview}...")
+            except Exception as e:
+                print(f"  ⚠️ Failed to load kernel: {e}")
         
         # Handle single or multiple images
         if isinstance(image_path, str):
@@ -482,6 +580,7 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
         all_uncertainties = []
         all_sentences_for_review = []
         all_notes = []
+        all_normalizations: List[str] = []
         total_word_count = 0
         worst_handwriting = "clear"
         any_strikethroughs = False
@@ -495,12 +594,14 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
                 page_num=i,
                 context=context,
                 ocr_engine=ocr_engine,
+                kernel_context=kernel_context,
             )
             
             all_transcriptions.append(result['transcription'])
             all_uncertainties.extend(result['uncertainties'])
             all_sentences_for_review.extend(result.get('sentences_for_review', []))
             all_notes.extend(result['notes'])
+            all_normalizations.extend(result.get("normalizations_applied", []) or [])
             total_word_count += result['word_count']
             
             # Track worst quality
@@ -560,7 +661,8 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
             accuracy_score=accuracy_score,
             requires_review=requires_review,
             notes=all_notes,
-            year_level=year_level
+            year_level=year_level,
+            normalizations_applied=all_normalizations or None,
         )
         
         print(f"\n✓ All pages transcribed")
@@ -580,6 +682,7 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
         page_num: int,
         context: str = None,
         ocr_engine: str = "vision",
+        kernel_context: dict = None,
     ) -> dict:
         """Transcribe a single page.
         
@@ -619,6 +722,7 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
                     student_name,
                     assignment,
                     context,
+                    kernel_context=kernel_context,
                 )
                 
                 metadata = structured.get("metadata", {})
@@ -634,6 +738,7 @@ If ALL sentences are 85%+ confident, return empty array: "sentences_for_review":
                     + [
                         f"OCR: Google Vision ({ocr_result['avg_confidence']:.1%} avg confidence)"
                     ],
+                    "normalizations_applied": structured.get("normalizations_applied", []),
                 }
             except Exception as e:
                 print(f"  ⚠️ Google Vision failed: {e}")
