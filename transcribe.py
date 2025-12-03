@@ -68,6 +68,16 @@ Examples:
         default='Essay about The Giver by Lois Lowry',
         help='Domain context to help disambiguate unclear words (default: The Giver)'
     )
+    parser.add_argument(
+        '--ocr-engine',
+        choices=['vision', 'claude'],
+        default='vision',
+        help='OCR engine: "vision" (Google Cloud Vision, default) or "claude" (fallback)',
+    )
+    parser.add_argument(
+        '--kernel',
+        help='Path to kernel JSON for character/term normalization',
+    )
     
     args = parser.parse_args()
     
@@ -97,7 +107,9 @@ Examples:
         student_name=args.student,
         assignment=args.assignment,
         year_level=args.year_level,
-        context=args.context
+        context=args.context,
+        ocr_engine=args.ocr_engine,
+        kernel_path=args.kernel,
     )
     
     # Save result
@@ -113,7 +125,52 @@ Examples:
     print(f"Accuracy: {result.accuracy_score:.1%}")
     print(f"Review needed: {'YES' if result.requires_review else 'NO'}")
     
-    if result.requires_review:
+    if result.requires_review and result.sentences_for_review:
+        print(f"\n{'='*60}")
+        print(f"⚠️  SENTENCE REVIEW REQUIRED")
+        print(f"{'='*60}")
+        print(f"Sentences flagged: {len(result.sentences_for_review)}")
+        print(f"Overall accuracy: {result.accuracy_score:.1%}")
+        
+        for i, sent in enumerate(result.sentences_for_review, 1):
+            # Handle both dict and SentenceReview object formats
+            if isinstance(sent, dict):
+                sentence_text = sent.get('sentence_text', '')
+                line_start = sent.get('line_start', 0)
+                line_end = sent.get('line_end', 0)
+                confidence = sent.get('confidence', 0.5)
+                reason = sent.get('reason', '')
+            else:
+                sentence_text = sent.sentence_text
+                line_start = sent.line_start
+                line_end = sent.line_end
+                confidence = sent.confidence
+                reason = sent.reason
+            
+            print(f"\n[{i}/{len(result.sentences_for_review)}] Lines {line_start}-{line_end} (confidence: {confidence:.0%})")
+            print(f"  \"{sentence_text}\"")
+            print(f"  Reason: {reason}")
+            
+            correction = input("\n  → Accept (Enter) or rewrite entire sentence: ").strip()
+            
+            if correction:
+                # Replace entire sentence in transcription
+                result.transcription = result.transcription.replace(sentence_text, correction, 1)
+                result.notes.append(f"Lines {line_start}-{line_end}: Human rewrote sentence")
+                print(f"  ✓ Sentence replaced")
+            else:
+                print(f"  ✓ Accepted as-is")
+        
+        # Mark as reviewed
+        result.requires_review = False
+        result.accuracy_score = min(0.95, result.accuracy_score + 0.10)
+        
+        # Re-save with corrections
+        output_path = transcriber.save_result(result, output_dir)
+        print(f"\n✓ Corrections saved to: {output_path}")
+    
+    elif result.requires_review:
+        # Fallback to old word-level review if no sentences flagged but uncertainties exist
         print(f"\n{'='*60}")
         print(f"⚠️  MANUAL REVIEW REQUIRED")
         print(f"{'='*60}")

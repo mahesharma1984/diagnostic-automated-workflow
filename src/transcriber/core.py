@@ -29,6 +29,56 @@ from anthropic import Anthropic
 from PIL import Image, ImageEnhance, ImageFilter
 
 
+def extract_context_from_kernel(kernel_path: str) -> dict:
+    """Extract character names, terms, and devices from kernel for OCR normalization.
+    
+    Args:
+        kernel_path: Path to kernel JSON file
+        
+    Returns:
+        dict with characters, terms, devices, title, author
+    """
+    import json as _json
+
+    with open(kernel_path, "r") as f:
+        kernel = _json.load(f)
+
+    # Extract characters from artifact_1 (character taxonomy)
+    characters: List[str] = []
+    if "artifact_1" in kernel:
+        for char_key, char_data in kernel["artifact_1"].get("characters", {}).items():
+            if isinstance(char_data, dict):
+                characters.append(char_data.get("name", char_key))
+            else:
+                characters.append(char_key)
+
+    # Extract terms from artifact_1 (concepts, places, objects, events)
+    terms: List[str] = []
+    for category in ["concepts", "places", "objects", "events"]:
+        if "artifact_1" in kernel and category in kernel["artifact_1"]:
+            terms.extend(kernel["artifact_1"][category].keys())
+
+    # Extract devices from thesis_slots
+    devices: List[str] = []
+    if "thesis_slots" in kernel:
+        slots = kernel["thesis_slots"]
+        for key in ["voice_label", "device_1", "device_2", "device_3"]:
+            if key in slots and slots[key]:
+                devices.append(slots[key])
+
+    # Get title and author
+    title = kernel.get("metadata", {}).get("title", "")
+    author = kernel.get("metadata", {}).get("author", "")
+
+    return {
+        "characters": characters,
+        "terms": terms,
+        "devices": devices,
+        "title": title,
+        "author": author,
+    }
+
+
 @dataclass
 class Uncertainty:
     """Represents an unclear section needing review"""
@@ -41,6 +91,16 @@ class Uncertainty:
 
 
 @dataclass
+class SentenceReview:
+    """A sentence flagged for human review"""
+    sentence_text: str          # Current transcription of this sentence
+    line_start: int             # Start line in document
+    line_end: int               # End line in document
+    confidence: float           # 0.0-1.0 (below 0.85 triggers review)
+    reason: str                 # Why flagged ("semantic uncertainty", "unclear words", etc.)
+
+
+@dataclass
 class TranscriptionResult:
     """Complete transcription output"""
     student_name: str
@@ -50,11 +110,13 @@ class TranscriptionResult:
     word_count: int
     handwriting_quality: str  # "clear", "moderate", "difficult"
     strikethroughs_present: bool
-    uncertainties: List[Uncertainty]
+    uncertainties: List[Uncertainty]  # KEEP for backward compatibility
+    sentences_for_review: List[SentenceReview]  # Sentence-level review items
     accuracy_score: float  # 0.0-1.0
     requires_review: bool
     notes: List[str]
     year_level: int = 8  # Student year level (7-12, default: 8)
+    normalizations_applied: Optional[List[str]] = None  # Tracks book-term normalizations
 
 
 class TVODETranscriber:
@@ -86,6 +148,174 @@ class TVODETranscriber:
         media_type = media_types.get(ext, 'image/jpeg')
         
         return image_data, media_type
+    
+    def _ocr_with_google_vision(self, image_path: str) -> dict:
+        """Use Google Cloud Vision API for handwriting OCR.
+        
+        Returns:
+            dict with:
+                - text: Full extracted text
+                - words: List of {word, confidence} dicts
+                - low_confidence_words: Words with confidence < 0.85
+                - avg_confidence: Average confidence across all words
+        """
+        from google.cloud import vision
+        
+        client = vision.ImageAnnotatorClient()
+        
+        with open(image_path, 'rb') as f:
+            content = f.read()
+        
+        image = vision.Image(content=content)
+        
+        # Use document_text_detection for handwriting (better than text_detection)
+        response = client.document_text_detection(image=image)
+        
+        if response.error.message:
+            raise Exception(f"Google Vision API error: {response.error.message}")
+        
+        # Extract full text
+        full_text = response.full_text_annotation.text if response.full_text_annotation else ""
+        
+        # Extract word-level confidence
+        words = []
+        low_confidence_words = []
+        
+        if response.full_text_annotation:
+            for page in response.full_text_annotation.pages:
+                for block in page.blocks:
+                    for paragraph in block.paragraphs:
+                        for word in paragraph.words:
+                            word_text = ''.join([symbol.text for symbol in word.symbols])
+                            confidence = word.confidence
+                            
+                            words.append({
+                                'word': word_text,
+                                'confidence': confidence
+                            })
+                            
+                            if confidence < 0.85:
+                                low_confidence_words.append({
+                                    'word': word_text,
+                                    'confidence': confidence
+                                })
+        
+        return {
+            'text': full_text,
+            'words': words,
+            'low_confidence_words': low_confidence_words,
+            'avg_confidence': sum(w['confidence'] for w in words) / len(words) if words else 0.0
+        }
+    
+    def _structure_with_claude(
+        self,
+        raw_text: str,
+        low_confidence_words: list,
+        student_name: str,
+        assignment: str,
+        context: str = None,
+        kernel_context: dict = None,
+    ) -> dict:
+        """Use Claude to structure raw OCR text and flag uncertain sentences.
+        
+        Claude does NOT read the image — only processes the OCR text.
+        """
+        # Build kernel context section if provided
+        kernel_section = ""
+        if kernel_context:
+            chars = ", ".join(kernel_context.get("characters", [])[:10])
+            terms = ", ".join(kernel_context.get("terms", [])[:15])
+            devices = ", ".join(kernel_context.get("devices", [])[:5])
+            title = kernel_context.get("title", "")
+            author = kernel_context.get("author", "")
+
+            kernel_section = f"""
+## Book Context: {title} by {author}
+
+**Characters (normalize OCR variations to these):**
+{chars}
+
+**Key Terms:**
+{terms}
+
+**Literary Devices:**
+{devices}
+
+NORMALIZATION RULES:
+- If OCR shows "Jong", "Jone", "Janne", "Jones" → normalize to "Jonas"
+- If OCR shows "Gaber", "Gabrel" → normalize to "Gabriel"
+- If OCR shows "Samness" → normalize to "Sameness"
+- If OCR shows "Third Pessa" → normalize to "Third Person"
+- Match any close variations to the character/term lists above
+- Preserve actual student spelling errors (don't normalize non-book words)
+"""
+
+        # Build human-readable list of low-confidence words for Claude
+        low_conf_list = ", ".join(
+            [
+                f"'{w['word']}' ({w['confidence']:.0%})"
+                for w in low_confidence_words[:10]
+                if "word" in w and "confidence" in w
+            ]
+        )
+
+        prompt = f"""Structure this OCR-extracted student essay text.
+
+**Student:** {student_name}
+**Assignment:** {assignment}
+**Context:** {context or "Student essay"}
+{kernel_section}
+
+**Raw OCR text:**
+{raw_text}
+
+**Low-confidence words from OCR:** {low_conf_list or "None"}
+
+TASKS:
+1. Clean up OCR artifacts (random line breaks, spacing issues)
+2. Normalize character names and book terms to correct spelling (see Book Context above)
+3. Preserve student spelling/grammar errors for non-book words
+4. Identify sentences with remaining uncertain words
+
+OUTPUT FORMAT — Return ONLY valid JSON:
+
+{{
+  "transcription": "Cleaned and normalized text...",
+  "metadata": {{
+    "word_count": 123,
+    "handwriting_quality": "clear|moderate|difficult"
+  }},
+  "sentences_for_review": [
+    {{
+      "sentence_text": "Sentence with uncertain words...",
+      "line_start": 3,
+      "line_end": 4,
+      "confidence": 0.75,
+      "reason": "contains uncertain word 'xyz'"
+    }}
+  ],
+  "normalizations_applied": ["Jong → Jonas", "Samness → Sameness"],
+  "notes": ["observations"]
+}}"""
+        
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=4000,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        
+        result_text = response.content[0].text.strip()
+        
+        # Parse JSON (handle markdown code blocks)
+        if result_text.startswith("```"):
+            parts = result_text.split("```")
+            if len(parts) >= 2:
+                result_text = parts[1]
+                if result_text.startswith("json"):
+                    result_text = result_text[4:]
+        
+        return json.loads(result_text)
     
     def _preprocess_image(self, image_path: str, enhancement_level: str = "auto") -> tuple[str, str]:
         """Preprocess image to improve transcription accuracy.
@@ -243,70 +473,70 @@ class TVODETranscriber:
         }
     
     def _build_transcription_prompt(self, student_name: str, assignment: str, context: str = None) -> str:
-        """Build focused transcription prompt (v2.1 - simplified for accuracy)
+        """Build transcription prompt with sentence-level confidence scoring"""
         
-        Key changes from v2.0:
-        - Shorter prompt (20 lines vs 180)
-        - Focus on accuracy over exhaustive rules
-        - Combined with temperature=0 for deterministic output
-        - Added domain context support
-        """
-        
-        context_section = f"\n{f'**Context:** {context}' if context else ''}"
+        context_section = f"\n**Context:** {context}" if context else ""
         
         domain_hint = ""
         if context and 'Giver' in context:
             domain_hint = '''
-
-DOMAIN CONTEXT:
-This is an essay about "The Giver" by Lois Lowry. 
-
-Expected terms you may encounter: Jonas, Gabriel (Gabe), The Giver, Receiver, 
-
-Sameness, release, memories, sled, Community, Stirrings, Elsewhere, Old, 
-
-Ceremony of Twelve, Assignments, Family Unit, Nurturing Center.
-
-If an unclear word could be one of these terms, include it in alternatives.
-
+DOMAIN CONTEXT: Essay about "The Giver" by Lois Lowry.
+Expected terms: Jonas, Gabriel, The Giver, Sameness, release, memories, 
+sled, Community, Elsewhere, Ceremony of Twelve, Assignments, Family Unit.
 '''
         
-        return f"""Transcribe this handwritten student work exactly as written.
+        return f"""Transcribe this handwritten student work.
 
 **Student:** {student_name}
 **Assignment:** {assignment}{context_section}
+{domain_hint}
 
 RULES:
-1. Transcribe ONLY text you can clearly read - mark unclear words as [UNCLEAR: best_guess/alternative]
-2. COMPLETELY SKIP any crossed-out/strikethrough text (do not include it at all)
-3. Preserve all spelling and grammar errors exactly as the student wrote them
+1. Transcribe ALL text, giving your best interpretation of every word
+2. COMPLETELY SKIP any crossed-out/strikethrough text
+3. Preserve all spelling and grammar errors exactly as written
 4. Include the header/title at the top
 
-CRITICAL: Do NOT guess or infer unclear words from context. If you can't clearly see each letter, mark it [UNCLEAR].
-{domain_hint}
-OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
+CRITICAL: After transcribing, identify any SENTENCES where you are less than 85% confident. 
+Flag sentences that:
+- Contain words you had to guess at
+- Don't make semantic sense (unusual phrases like "long body" instead of "loving family")
+- Have multiple unclear words close together
+
+OUTPUT FORMAT - Return ONLY valid JSON:
 
 {{
-  "transcription": "Full text with [UNCLEAR] markers where needed...",
+  "transcription": "Full transcribed text here...",
   "metadata": {{
     "word_count": 123,
     "handwriting_quality": "clear|moderate|difficult",
     "strikethroughs_present": true
   }},
-  "uncertainties": [
+  "sentences_for_review": [
     {{
-      "line_number": 5,
-      "context": "...surrounding text...",
-      "unclear_word": "[UNCLEAR: option1/option2]",
-      "alternatives": ["option1", "option2"],
-      "confidence": "low",
-      "reason": "letters unclear"
+      "sentence_text": "The exact sentence as you transcribed it.",
+      "line_start": 3,
+      "line_end": 4,
+      "confidence": 0.72,
+      "reason": "unclear word 'long body' - may be misread"
     }}
   ],
-  "notes": ["any observations about the handwriting"]
-}}"""
+  "notes": ["any observations"]
+}}
+
+If ALL sentences are 85%+ confident, return empty array: "sentences_for_review": []
+"""
     
-    def transcribe(self, image_path, student_name: str, assignment: str, year_level: int = 8, context: str = None) -> TranscriptionResult:
+    def transcribe(
+        self,
+        image_path,
+        student_name: str,
+        assignment: str,
+        year_level: int = 8,
+        context: str = None,
+        ocr_engine: str = "vision",
+        kernel_path: str = None,
+    ) -> TranscriptionResult:
         """Transcribe image(s) and return structured result
         
         Args:
@@ -315,10 +545,24 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
             assignment: Assignment name
             year_level: Student year level (7-12, default: 8)
             context: Optional domain context to help disambiguate unclear words
+            ocr_engine: "vision" (Google Cloud Vision) or "claude" (fallback)
+            kernel_path: Optional path to kernel JSON for character/term normalization
         """
         
         # Store context for use in retry pass
         self._current_context = context or "Essay about The Giver by Lois Lowry"
+
+        # Load kernel context if provided
+        kernel_context = None
+        if kernel_path:
+            try:
+                kernel_context = extract_context_from_kernel(kernel_path)
+                print(f"  Loaded kernel context: {kernel_context.get('title', 'Unknown')}")
+                chars_preview = ", ".join(kernel_context.get("characters", [])[:5])
+                if chars_preview:
+                    print(f"  Characters: {chars_preview}...")
+            except Exception as e:
+                print(f"  ⚠️ Failed to load kernel: {e}")
         
         # Handle single or multiple images
         if isinstance(image_path, str):
@@ -334,18 +578,30 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         # Transcribe all pages
         all_transcriptions = []
         all_uncertainties = []
+        all_sentences_for_review = []
         all_notes = []
+        all_normalizations: List[str] = []
         total_word_count = 0
         worst_handwriting = "clear"
         any_strikethroughs = False
         
         for i, path in enumerate(image_paths, 1):
             print(f"\nProcessing page {i}/{len(image_paths)}...")
-            result = self._transcribe_single_page(path, student_name, assignment, page_num=i, context=context)
+            result = self._transcribe_single_page(
+                path,
+                student_name,
+                assignment,
+                page_num=i,
+                context=context,
+                ocr_engine=ocr_engine,
+                kernel_context=kernel_context,
+            )
             
             all_transcriptions.append(result['transcription'])
             all_uncertainties.extend(result['uncertainties'])
+            all_sentences_for_review.extend(result.get('sentences_for_review', []))
             all_notes.extend(result['notes'])
+            all_normalizations.extend(result.get("normalizations_applied", []) or [])
             total_word_count += result['word_count']
             
             # Track worst quality
@@ -377,8 +633,20 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
             any_strikethroughs
         )
         
+        # Convert sentence dicts to SentenceReview objects
+        sentence_reviews = [
+            SentenceReview(
+                sentence_text=sent.get('sentence_text', ''),
+                line_start=sent.get('line_start', 0),
+                line_end=sent.get('line_end', 0),
+                confidence=sent.get('confidence', 0.5),
+                reason=sent.get('reason', 'flagged for review')
+            )
+            for sent in all_sentences_for_review
+        ]
+        
         # Determine if review needed
-        requires_review = self._needs_review(all_uncertainties, worst_handwriting, accuracy_score)
+        requires_review = len(sentence_reviews) > 0 or self._needs_review(all_uncertainties, worst_handwriting, accuracy_score)
         
         result = TranscriptionResult(
             student_name=student_name,
@@ -389,10 +657,12 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
             handwriting_quality=worst_handwriting,
             strikethroughs_present=any_strikethroughs,
             uncertainties=all_uncertainties,
+            sentences_for_review=sentence_reviews,
             accuracy_score=accuracy_score,
             requires_review=requires_review,
             notes=all_notes,
-            year_level=year_level
+            year_level=year_level,
+            normalizations_applied=all_normalizations or None,
         )
         
         print(f"\n✓ All pages transcribed")
@@ -404,9 +674,21 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         
         return result
     
-    def _transcribe_single_page(self, image_path: str, student_name: str, assignment: str, page_num: int, context: str = None) -> dict:
-        """Transcribe a single page"""
+    def _transcribe_single_page(
+        self,
+        image_path: str,
+        student_name: str,
+        assignment: str,
+        page_num: int,
+        context: str = None,
+        ocr_engine: str = "vision",
+        kernel_context: dict = None,
+    ) -> dict:
+        """Transcribe a single page.
         
+        Args:
+            ocr_engine: "vision" (Google Cloud Vision) or "claude" (fallback)
+        """
         # Assess image quality
         quality = self._assess_image_quality(image_path)
         print(f"  Image quality: {quality['quality_score']:.0%} ({quality['recommended_enhancement']} enhancement)")
@@ -417,83 +699,145 @@ OUTPUT FORMAT - Return ONLY valid JSON (no markdown, no backticks):
         if quality['issues']:
             print(f"  Issues detected: {', '.join(quality['issues'])}")
         
-        # Preprocess image based on quality assessment
-        image_data, media_type = self._preprocess_image(
-            image_path, 
-            enhancement_level=quality['recommended_enhancement']
-        )
-        
-        # Build prompt
-        prompt = self._build_transcription_prompt(student_name, assignment, context=context)
-        prompt += f"\n\n**This is page {page_num} of the assignment.**"
-        
-        # Call Claude API
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=4000,
-            temperature=0,  # Deterministic output for transcription accuracy
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_data,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
+        # Vision-first path
+        if ocr_engine == "vision":
+            try:
+                # Step 1: OCR with Google Vision
+                print("  Using Google Cloud Vision for OCR...")
+                ocr_result = self._ocr_with_google_vision(image_path)
+                
+                print(
+                    f"  OCR complete: {len(ocr_result['words'])} words, "
+                    f"avg confidence: {ocr_result['avg_confidence']:.1%}"
+                )
+                
+                if ocr_result['low_confidence_words']:
+                    print(f"  Low confidence words: {len(ocr_result['low_confidence_words'])}")
+                
+                # Step 2: Structure with Claude
+                print("  Structuring with Claude...")
+                structured = self._structure_with_claude(
+                    ocr_result['text'],
+                    ocr_result['low_confidence_words'],
+                    student_name,
+                    assignment,
+                    context,
+                    kernel_context=kernel_context,
+                )
+                
+                metadata = structured.get("metadata", {})
+                
+                return {
+                    "transcription": structured.get("transcription", ocr_result["text"]),
+                    "word_count": metadata.get("word_count", len(ocr_result["words"])),
+                    "handwriting_quality": metadata.get("handwriting_quality", "moderate"),
+                    "strikethroughs_present": False,  # Vision API doesn't detect this
+                    "uncertainties": [],  # Deprecated, use sentences_for_review
+                    "sentences_for_review": structured.get("sentences_for_review", []),
+                    "notes": structured.get("notes", [])
+                    + [
+                        f"OCR: Google Vision ({ocr_result['avg_confidence']:.1%} avg confidence)"
                     ],
+                    "normalizations_applied": structured.get("normalizations_applied", []),
                 }
-            ],
-        )
+            except Exception as e:
+                print(f"  ⚠️ Google Vision failed: {e}")
+                print("  Falling back to Claude...")
+                ocr_engine = "claude"
         
-        # Extract response
-        response_text = response.content[0].text
-        
-        # Parse JSON (handle potential markdown wrapping)
-        response_text = response_text.strip()
-        if response_text.startswith("```"):
-            # Strip markdown code blocks
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        
-        try:
-            data = json.loads(response_text.strip())
-        except json.JSONDecodeError as e:
-            print(f"ERROR: Failed to parse JSON response for page {page_num}")
-            print(f"Response text: {response_text[:500]}")
-            raise e
-        
-        # Build uncertainties for this page
-        uncertainties = [
-            {
-                'line_number': u.get('line_number', 0),
-                'context': u.get('context', ''),
-                'unclear_word': u.get('unclear_word', ''),
-                'alternatives': u.get('alternatives', []),
-                'confidence': u.get('confidence', 'low'),
-                'reason': u.get('reason', '')
+        # Claude-only fallback path (existing behavior)
+        if ocr_engine == "claude":
+            # Preprocess image based on quality assessment
+            image_data, media_type = self._preprocess_image(
+                image_path,
+                enhancement_level=quality["recommended_enhancement"],
+            )
+            
+            # Build prompt
+            prompt = self._build_transcription_prompt(student_name, assignment, context=context)
+            prompt += f"\n\n**This is page {page_num} of the assignment.**"
+            
+            # Call Claude API
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4000,
+                temperature=0,  # Deterministic output for transcription accuracy
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": image_data,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt,
+                            },
+                        ],
+                    }
+                ],
+            )
+            
+            # Extract response
+            response_text = response.content[0].text
+            
+            # Parse JSON (handle potential markdown wrapping)
+            response_text = response_text.strip()
+            if response_text.startswith("```"):
+                # Strip markdown code blocks
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            
+            try:
+                data = json.loads(response_text.strip())
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Failed to parse JSON response for page {page_num}")
+                print(f"Response text: {response_text[:500]}")
+                raise e
+            
+            # Build uncertainties for this page
+            uncertainties = [
+                {
+                    "line_number": u.get("line_number", 0),
+                    "context": u.get("context", ""),
+                    "unclear_word": u.get("unclear_word", ""),
+                    "alternatives": u.get("alternatives", []),
+                    "confidence": u.get("confidence", "low"),
+                    "reason": u.get("reason", ""),
+                }
+                for u in data.get("uncertainties", [])
+            ]
+            
+            # Parse sentences_for_review
+            sentences_for_review = []
+            for sent in data.get("sentences_for_review", []):
+                sentences_for_review.append(
+                    {
+                        "sentence_text": sent.get("sentence_text", ""),
+                        "line_start": sent.get("line_start", 0),
+                        "line_end": sent.get("line_end", 0),
+                        "confidence": sent.get("confidence", 0.5),
+                        "reason": sent.get("reason", "flagged for review"),
+                    }
+                )
+            
+            metadata = data.get("metadata", {})
+            
+            return {
+                "transcription": data["transcription"],
+                "word_count": metadata.get("word_count", len(data["transcription"].split())),
+                "handwriting_quality": metadata.get("handwriting_quality", "moderate"),
+                "strikethroughs_present": metadata.get("strikethroughs_present", False),
+                "uncertainties": uncertainties,
+                "sentences_for_review": sentences_for_review,
+                "notes": data.get("notes", []),
             }
-            for u in data.get('uncertainties', [])
-        ]
-        
-        metadata = data.get('metadata', {})
-        
-        return {
-            'transcription': data['transcription'],
-            'word_count': metadata.get('word_count', len(data['transcription'].split())),
-            'handwriting_quality': metadata.get('handwriting_quality', 'moderate'),
-            'strikethroughs_present': metadata.get('strikethroughs_present', False),
-            'uncertainties': uncertainties,
-            'notes': data.get('notes', [])
-        }
     
     def _calculate_accuracy_score(self, 
                                    uncertainties: List[Uncertainty],
