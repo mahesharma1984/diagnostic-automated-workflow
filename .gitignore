@@ -19,3 +19,6 @@ outputs/transcripts/*.json
 outputs/evaluations/*.json
 outputs/report_cards/*.txt
 outputs/
+*.json
+helical-bonito-*.json
+*.json
