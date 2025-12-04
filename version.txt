@@ -1,15 +1,45 @@
 TVODE Diagnostic Pipeline
 =========================
 
-Current Version: 2.1.0
+Current Version: 2.1.1
 Release Date: 2025-12-04
 
 ---
 
 VERSION HISTORY
 
-v2.1.0 (2025-12-04) - Transcription Accuracy Enhancement
+v2.1.1 (2025-12-04) - Thesis Evaluator Validation Fix
 -----------------------------------------------------
+COMPONENT: Evaluator (Thesis) v2.1
+
+CHANGES:
+- Restore component signals to API prompt (evidence_count, cause_effect_count, counter_signals)
+- Add hard validation that checks extracted counts, not API labels
+- Cap SM1 at 2.5 when evidence_count=0 (regardless of API's evidence_quality claim)
+- Cap DCCEPS layer at 2 when cause_effect_count=0
+
+RESULTS:
+- Gabriel: 4.05 → 3.1 (correctly penalized for 0 evidence, 0 chains)
+- Desmond: 3.75 → 3.55 (correctly scores higher than Gabriel)
+- Coden: 4.05 → 4.05 (unchanged, has real substance)
+- Order now reflects actual argument quality
+
+ROOT CAUSE:
+- Component extraction worked correctly
+- API prompt was missing the extracted signals (implementation regression)
+- API rewarded prose fluency over argument substance
+- Validation checked API's label ("missing") not hard count (0)
+
+KNOWN ISSUES:
+- SM3 still rewards prose smoothness over argument structure (Issue 3 pending)
+- No academic integrity flag for high-fluency/zero-substance pattern (Issue 2 pending)
+- Minor: ceiling not fully enforced on SM2/SM3 when evidence_count=0
+
+
+v2.1.0 (2025-12-04) - Transcription Accuracy Enhancement
+--------------------------------------------------------
+COMPONENT: Transcriber v2.1
+
 CHANGES:
 - Add Google Vision handwriting hint (en-t-i0-handwrit)
 - Use paragraph structure for correct reading order (not spatial)
@@ -29,20 +59,34 @@ KNOWN ISSUES:
 - Strikethrough text still leaks through (future fix)
 
 
-v2.0.0 (2025-12-03) - Google Vision Integration
------------------------------------------------
-CHANGES:
+v2.0.0 (2025-12-03) - Google Vision Integration + Thesis API Evaluator
+----------------------------------------------------------------------
+COMPONENTS: Transcriber v2.0, Evaluator (Thesis) v2.0
+
+TRANSCRIBER CHANGES:
 - Replace Claude vision with Google Cloud Vision API for OCR
 - Add kernel context injection for character/term normalization
 - Add --kernel and --ocr-engine CLI arguments
 
-RESULTS:
+TRANSCRIBER RESULTS:
 - Reduced hallucination (no more "loving family" → "long body")
 - Name normalization working (Jong → Jonas, Samness → Sameness)
 
+THESIS EVALUATOR CHANGES:
+- Hybrid architecture: rule-based extraction → API scoring
+- Year-level relative scoring (Year 7-8 expects L2-3, not L4)
+- Book context injection for charitable interpretation
+- Word count ceiling enforcement
+- DCCEPS layer assessment via API
+
+THESIS EVALUATOR RESULTS:
+- Position detection fixed (Gabriel correctly identified as "hero")
+- Year 8 students not penalized for not reaching Layer 4
+- Scoring differentiates students by actual reasoning quality
+
 ISSUES IDENTIFIED:
-- Claude structuring step still edits/hallucinates
-- Led to v2.1 accuracy enhancement
+- API not receiving extracted component signals (fixed in v2.1.1)
+- Claude structuring step still edits/hallucinates (led to v2.1 transcriber)
 
 
 v1.0.0 (2025-11-19) - Initial Release
@@ -51,8 +95,9 @@ ARCHITECTURE:
 - Single-stage Claude vision transcription
 - Claude Sonnet 4 model (claude-sonnet-4-20250514)
 - Direct image-to-JSON conversion
+- Rule-based thesis evaluator (regex pattern matching)
 
-FEATURES:
+TRANSCRIBER FEATURES:
 - Image transcription via Claude API vision
 - Multi-page document support (--image page1.jpg page2.jpg)
 - Structured JSON output with metadata
@@ -62,54 +107,30 @@ FEATURES:
 - Handwriting quality assessment (clear/moderate/difficult)
 - Accuracy score calculation (0.0-1.0)
 
+THESIS EVALUATOR FEATURES:
+- DCCEPS framework (Definition → Comparison → Cause-Effect → Problem-Solution)
+- Position detection via regex patterns
+- Evidence extraction (quotes, scene references)
+- Reasoning chain detection (cause-effect, comparison patterns)
+- Counter-argument and synthesis detection
+- SM1/SM2/SM3 scoring parallel to TVODE
+
 DATA STRUCTURES:
-- TranscriptionResult dataclass:
-  - student_name, assignment, image_path
-  - transcription (full text)
-  - word_count, handwriting_quality
-  - strikethroughs_present (bool)
-  - uncertainties (List[Uncertainty])
-  - accuracy_score, requires_review
-  - notes
-
-- Uncertainty dataclass:
-  - line_number, context
-  - unclear_word, alternatives
-  - confidence (high/medium/low)
-  - reason
-
-OUTPUT FORMAT:
-{
-  "transcription": "text...",
-  "metadata": {
-    "word_count": 156,
-    "handwriting_quality": "moderate",
-    "strikethroughs_present": true
-  },
-  "uncertainties": [...],
-  "notes": [...]
-}
-
-PROMPT APPROACH (v1.0):
-- Long prompt (~180 lines) with extensive rules
-- Conservative "do not guess" instructions
-- [UNCLEAR: option1/option2] marker system
-- Self-check protocol for hallucination prevention
-- 95% visual certainty threshold
+- TranscriptionResult dataclass
+- ThesisComponents dataclass (position, evidence_items, reasoning_chains, etc.)
+- ThesisEvaluationResult dataclass
 
 KNOWN ISSUES:
 - Claude hallucination on difficult handwriting
-- "loving family" → "long body" type semantic errors
-- Strikethrough text sometimes included
-- No temperature parameter (defaulted to 1.0)
-- Single-pass architecture (no retry on low confidence)
+- Position detection fails on complex arguments (counter-argument confusion)
+- Rule-based scoring doesn't understand semantic meaning
 
 ---
 
 COMPONENTS
 
 Transcriber: v2.1
-Evaluator (Thesis): v2.0
+Evaluator (Thesis): v2.1
 Evaluator (TVODE): v1.0
 Kernel Format: v4.0
 
@@ -121,3 +142,15 @@ OCR Engine: Google Cloud Vision (default)
 Fallback: Claude vision
 Confidence Tiers: 85% / 75%
 Validation: Word count ±10%, no new words >3
+
+---
+
+PENDING ISSUES
+
+ISSUE_academic_integrity_flag.md (Priority: High)
+- Detect high-fluency + zero-substance pattern
+- Flag for teacher review, not auto-penalty
+
+ISSUE_sm3_argument_structure.md (Priority: Medium)
+- Redefine SM3 as argument structure, not prose fluency
+- Add SM3 floor based on evidence/reasoning presence

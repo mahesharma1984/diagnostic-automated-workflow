@@ -1,6 +1,9 @@
 """
 Thesis API Evaluator - Claude judges argument quality
 
+Version: 2.1.1 (2025-12-04)
+Component: Evaluator (Thesis) v2.1
+
 Hybrid approach:
 - Rule-based extraction (thesis_components.py) finds patterns
 - API scoring (this file) judges meaning and quality
@@ -8,6 +11,24 @@ Hybrid approach:
 This solves the position detection problem where pattern-counting
 fails to understand argument direction, counter-arguments, and
 weighing language.
+
+v2.1.1 Changes:
+- Restore component signals to API prompt (evidence_count, cause_effect_count, counter_signals)
+- Add hard validation that checks extracted counts, not API labels
+- Cap SM1 at 2.5 when evidence_count=0 (regardless of API's evidence_quality claim)
+- Cap DCCEPS layer at 2 when cause_effect_count=0
+
+Results:
+- Gabriel: 4.05 → 3.1 (correctly penalized for 0 evidence, 0 chains)
+- Desmond: 3.75 → 3.55 (correctly scores higher than Gabriel)
+- Coden: 4.05 → 4.05 (unchanged, has real substance)
+- Order now reflects actual argument quality
+
+Root Cause:
+- Component extraction worked correctly
+- API prompt was missing the extracted signals (implementation regression)
+- API rewarded prose fluency over argument substance
+- Validation checked API's label ("missing") not hard count (0)
 """
 
 import json
@@ -390,6 +411,29 @@ You are evaluating a Year {year_level} student's thesis writing.
 
 ---
 
+## Pre-Extracted Signals (VALIDATE your assessment against these)
+
+**Evidence:**
+- Evidence items detected: {evidence_count}
+- Quote patterns found: {quote_count}
+
+**Reasoning:**
+- Cause-effect chains detected: {cause_effect_count}
+- Comparison patterns detected: {comparison_count}
+- Total reasoning chains: {total_chains}
+
+**Argument Structure:**
+- Counter-argument signals: {counter_signals}
+- Synthesis markers: {has_synthesis}
+
+**VALIDATION RULES:**
+- If you assess evidence_quality as "paraphrased" or "specific" but evidence_count=0, reconsider
+- If you assess dcceps_layer >= 3 but cause_effect_count=0, reconsider  
+- If you assess has_counter_argument=true but counter_signals=0, reconsider
+- These signals may miss some patterns, but 0 counts are strong indicators of absence
+
+---
+
 ## Your Task
 
 **CHARITABLY INTERPRET the student's argument.** 
@@ -442,6 +486,82 @@ Respond with JSON only:
   }}
 }}
 """
+
+
+def validate_api_against_components(
+    result: Dict,
+    evidence_count: int,
+    cause_effect_count: int,
+    counter_signals: int,
+    has_synthesis: bool,
+    year_level: int
+) -> Dict:
+    """
+    Hard validation: Override API assessments that contradict extracted components.
+    
+    Returns modified result dict with any corrections applied.
+    """
+    
+    corrections = []
+    
+    # Validation 1: Evidence quality vs evidence count
+    claimed_evidence = result.get('evidence_quality', 'missing')
+    if claimed_evidence in ('specific', 'paraphrased') and evidence_count == 0:
+        corrections.append(f"evidence_quality: {claimed_evidence} → missing (0 items detected)")
+        result['evidence_quality'] = 'missing'
+        result['sm1_score'] = min(result.get('sm1_score', 5.0), 2.5)
+        result['ceiling'] = min(result.get('ceiling', 5.0), 3.0)
+    
+    # Validation 1b: Cap SM1 if no evidence detected (regardless of what API claims)
+    if evidence_count == 0:
+        if result.get('sm1_score', 0) > 2.5:
+            corrections.append(f"sm1_score: {result['sm1_score']} → 2.5 (evidence_count=0)")
+            result['sm1_score'] = 2.5
+            result['ceiling'] = 3.0
+        # Also fix the label if API got it wrong
+        if result.get('evidence_quality') not in ('missing', 'general'):
+            corrections.append(f"evidence_quality: {result.get('evidence_quality')} → missing (evidence_count=0)")
+            result['evidence_quality'] = 'missing'
+    
+    # Validation 2: DCCEPS layer vs cause-effect chains
+    claimed_layer = result.get('dcceps_layer', 1)
+    if claimed_layer >= 3 and cause_effect_count == 0:
+        corrections.append(f"dcceps_layer: {claimed_layer} → 2 (0 cause-effect chains detected)")
+        result['dcceps_layer'] = 2
+        result['dcceps_label'] = 'Comparison'
+        # Recalculate SM2 with corrected layer
+        result['sm2_score'] = score_dcceps_relative(2, year_level)
+    
+    # Validation 3: Counter-argument claim vs signals
+    if result.get('has_counter_argument', False) and counter_signals == 0:
+        corrections.append("has_counter_argument: true → false (0 signals detected)")
+        result['has_counter_argument'] = False
+    
+    # Validation 4: SM scores cannot exceed ceiling
+    ceiling = result.get('ceiling', 5.0)
+    if result.get('sm2_score', 0) > ceiling:
+        corrections.append(f"sm2_score: {result['sm2_score']} → {ceiling} (ceiling enforcement)")
+        result['sm2_score'] = ceiling
+    if result.get('sm3_score', 0) > ceiling:
+        corrections.append(f"sm3_score: {result['sm3_score']} → {ceiling} (ceiling enforcement)")
+        result['sm3_score'] = ceiling
+    
+    # Log corrections
+    if corrections:
+        print(f"  ⚠ Validation corrections applied:")
+        for c in corrections:
+            print(f"    - {c}")
+    
+    # Recalculate overall score
+    sm1 = result.get('sm1_score', 3.0)
+    sm2 = result.get('sm2_score', 2.5)
+    sm3 = result.get('sm3_score', 2.5)
+    result['overall_score'] = round((sm1 * 0.4) + (sm2 * 0.3) + (sm3 * 0.3), 2)
+    result['total_points'] = round(result['overall_score'] * 5, 1)
+    
+    result['validation_corrections'] = corrections
+    
+    return result
 
 
 def evaluate_thesis_with_api(
@@ -499,6 +619,10 @@ def evaluate_thesis_with_api(
         reasoning_types = list(getattr(components, 'reasoning_types', {}).keys())
         counter_signals = len(getattr(components, 'counter_arguments', []))
         has_synthesis = bool(getattr(components, 'synthesis', None))
+        # Calculate detailed signal counts from components
+        cause_effect_count = len(getattr(components, 'reasoning_types', {}).get('cause_effect', []))
+        comparison_count = len(getattr(components, 'reasoning_types', {}).get('comparison', []))
+        total_chains = len(getattr(components, 'reasoning_chains', []))
     else:
         # Fallback: basic detection for context
         evidence_count = len(re.findall(r'"[^"]{5,}"', text))
@@ -509,6 +633,12 @@ def evaluate_thesis_with_api(
             reasoning_types.append('comparison')
         counter_signals = len(re.findall(r'\b(although|however|while|despite)\b', text, re.I))
         has_synthesis = bool(re.search(r'\b(therefore|thus|in conclusion|overall)\b', text, re.I))
+        # Fallback counts
+        cause_effect_count = 1 if 'cause_effect' in reasoning_types else 0
+        comparison_count = 1 if 'comparison' in reasoning_types else 0
+        total_chains = len(reasoning_types)
+    
+    quote_count = len(re.findall(r'"[^"]{10,}"', text))  # Quotes with 10+ chars
     
     # Get expectations for year level
     exp = get_dcceps_expectations(year_level)
@@ -529,7 +659,14 @@ def evaluate_thesis_with_api(
         rubric=full_rubric + book_context,
         text_context=text_context,
         text=text,
-        year_level=year_level
+        year_level=year_level,
+        evidence_count=evidence_count,
+        quote_count=quote_count,
+        cause_effect_count=cause_effect_count,
+        comparison_count=comparison_count,
+        total_chains=total_chains,
+        counter_signals=counter_signals,
+        has_synthesis="Yes" if has_synthesis else "No"
     )
     
     # Call API
@@ -584,6 +721,16 @@ def evaluate_thesis_with_api(
     if abs(result.get('sm2_score', 0) - expected_sm2) > 0.5:
         print(f"  ⚠ Adjusting SM2: {result['sm2_score']} → {expected_sm2} (year-relative)")
         result['sm2_score'] = min(expected_sm2, ceiling)  # Still respect ceiling
+    
+    # Hard validation against extracted components
+    result = validate_api_against_components(
+        result=result,
+        evidence_count=evidence_count,
+        cause_effect_count=cause_effect_count,
+        counter_signals=counter_signals,
+        has_synthesis=has_synthesis,
+        year_level=year_level
+    )
     
     # Store year level info
     result['year_level'] = year_level
