@@ -1,14 +1,14 @@
 TVODE Diagnostic Pipeline
 =========================
 
-Current Version: 3.0.0
+Current Version: 2.1.0
 Release Date: 2025-12-04
 
 ---
 
 VERSION HISTORY
 
-v3.0.0 (2025-12-04) - Transcription Accuracy Overhaul
+v2.1.0 (2025-12-04) - Transcription Accuracy Enhancement
 -----------------------------------------------------
 CHANGES:
 - Add Google Vision handwriting hint (en-t-i0-handwrit)
@@ -42,26 +42,73 @@ RESULTS:
 
 ISSUES IDENTIFIED:
 - Claude structuring step still edits/hallucinates
-- Led to V3 overhaul
+- Led to v2.1 accuracy enhancement
 
 
-v1.0.0 (2025-11-27) - Initial Release
+v1.0.0 (2025-11-19) - Initial Release
 -------------------------------------
+ARCHITECTURE:
+- Single-stage Claude vision transcription
+- Claude Sonnet 4 model (claude-sonnet-4-20250514)
+- Direct image-to-JSON conversion
+
 FEATURES:
-- Claude-only transcription with vision
-- Multi-page support
-- Uncertainty flagging
-- Sentence-level review
+- Image transcription via Claude API vision
+- Multi-page document support (--image page1.jpg page2.jpg)
+- Structured JSON output with metadata
+- Uncertainty detection with [UNCLEAR] markers
+- Strikethrough detection (partial)
+- Interactive review loop for uncertain words
+- Handwriting quality assessment (clear/moderate/difficult)
+- Accuracy score calculation (0.0-1.0)
+
+DATA STRUCTURES:
+- TranscriptionResult dataclass:
+  - student_name, assignment, image_path
+  - transcription (full text)
+  - word_count, handwriting_quality
+  - strikethroughs_present (bool)
+  - uncertainties (List[Uncertainty])
+  - accuracy_score, requires_review
+  - notes
+
+- Uncertainty dataclass:
+  - line_number, context
+  - unclear_word, alternatives
+  - confidence (high/medium/low)
+  - reason
+
+OUTPUT FORMAT:
+{
+  "transcription": "text...",
+  "metadata": {
+    "word_count": 156,
+    "handwriting_quality": "moderate",
+    "strikethroughs_present": true
+  },
+  "uncertainties": [...],
+  "notes": [...]
+}
+
+PROMPT APPROACH (v1.0):
+- Long prompt (~180 lines) with extensive rules
+- Conservative "do not guess" instructions
+- [UNCLEAR: option1/option2] marker system
+- Self-check protocol for hallucination prevention
+- 95% visual certainty threshold
 
 KNOWN ISSUES:
 - Claude hallucination on difficult handwriting
-- "loving family" → "long body" type errors
+- "loving family" → "long body" type semantic errors
+- Strikethrough text sometimes included
+- No temperature parameter (defaulted to 1.0)
+- Single-pass architecture (no retry on low confidence)
 
 ---
 
 COMPONENTS
 
-Transcriber: v3.0
+Transcriber: v2.1
 Evaluator (Thesis): v2.0
 Evaluator (TVODE): v1.0
 Kernel Format: v4.0
