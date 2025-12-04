@@ -17,11 +17,7 @@ def generate_feedback(
     sm1: float, sm2: float, sm3: float,
     text: str,
     device_ctx: DeviceContext,
-    detected_device: Optional[str],
-    effect_dimensions: Optional[Dict[str, bool]] = None,
-    distinct_insights: Optional[int] = None,
-    grammar_error_count: Optional[int] = None,
-    grammar_errors: Optional[List[str]] = None
+    detected_device: Optional[str]
 ) -> Dict[str, str]:
     """
     Generate feedback for all three sub-metrics
@@ -32,10 +28,6 @@ def generate_feedback(
         text: Original student text
         device_ctx: Device context manager (has kernel data)
         detected_device: Name of detected device (or None)
-        effect_dimensions: Optional dict with reader_response, meaning_creation, thematic_impact
-        distinct_insights: Optional count of distinct insights
-        grammar_error_count: Optional count of grammar errors
-        grammar_errors: Optional list of grammar error descriptions
     
     Returns:
         Dict with sm1, sm1_next, sm2, sm2_next, sm3, sm3_next
@@ -50,13 +42,8 @@ def generate_feedback(
     
     # Generate each section
     feedback.update(_generate_sm1_feedback(components, text, device_function))
-    feedback.update(_generate_sm2_feedback(
-        components, text, detected_device, device_function,
-        effect_dimensions, distinct_insights
-    ))
-    feedback.update(_generate_sm3_feedback(
-        components, text, grammar_error_count, grammar_errors
-    ))
+    feedback.update(_generate_sm2_feedback(components, text, detected_device, device_function))
+    feedback.update(_generate_sm3_feedback(components, text))
     
     return feedback
 
@@ -118,78 +105,58 @@ def _generate_sm2_feedback(
     components: TVODEComponents,
     text: str,
     detected_device: Optional[str],
-    device_function: str,
-    effect_dimensions: Optional[Dict[str, bool]] = None,
-    distinct_insights: Optional[int] = None
+    device_function: str
 ) -> Dict[str, str]:
-    """Generate SM2 (Density Performance) feedback with depth dimensions"""
+    """Generate SM2 (Density Performance) feedback"""
     
-    # If dimensions not provided, calculate them
-    if effect_dimensions is None or distinct_insights is None:
-        from .scoring import score_sm2, score_sm1
-        _, ceiling = score_sm1(components)
-        _, effect_dimensions, distinct_insights = score_sm2(text, components, ceiling)
+    # Count analytical attempts
+    sentences = [s for s in re.split(r'[.!?]+', text) if s.strip()]
+    functional_verbs = set()
+    functional_verbs.update(components.verb_tiers.get('tier_1', []))
+    functional_verbs.update(components.verb_tiers.get('tier_2', []))
     
-    # Build feedback message
-    dimensions_present = []
-    if effect_dimensions.get('reader_response'):
-        dimensions_present.append("reader response")
-    if effect_dimensions.get('meaning_creation'):
-        dimensions_present.append("meaning creation")
-    if effect_dimensions.get('thematic_impact'):
-        dimensions_present.append("thematic impact")
+    count = sum(1 for s in sentences if any(v in s.lower() for v in functional_verbs))
     
-    sm2 = f"You make {distinct_insights} distinct analytical insights. "
-    
-    if dimensions_present:
-        sm2 += f"Your insights cover: {', '.join(dimensions_present)}. "
-    else:
-        sm2 += "Your insights focus on surface-level observations. "
+    sm2 = f"You make {count} analytical attempts. "
+    sm2 += "Your effects focus on reader engagement."
     
     # Next steps
     next_steps = []
     
-    if distinct_insights < 3:
+    if count < 3:
         next_steps.append("Build more distinct insights - each detail should unlock a DIFFERENT analytical point")
     
-    # Dimension guidance
-    if not effect_dimensions.get('meaning_creation'):
+    # Effect tier guidance
+    tier1_effects = components.effect_tiers.get('tier_1', [])
+    tier2_effects = components.effect_tiers.get('tier_2', [])
+    
+    if not tier1_effects and not tier2_effects:
+        # Use detected device name if available, otherwise generic
         device_name = detected_device.title() if detected_device else "the device"
         next_steps.append(
-            f"Add meaning creation: '{device_name} reveals how...' or '{device_name} demonstrates that...'"
+            f"Push toward meaning production (Tier 2). Instead of generic effects, write: "
+            f"'{device_name} reveals how the community...' or '{device_name} demonstrates that...'"
         )
     
-    if not effect_dimensions.get('thematic_impact'):
-        next_steps.append(
-            "Connect to broader themes: 'This reinforces the theme of...' or 'This reflects the novel's concern with...'"
-        )
-    
-    # Device-specific guidance
+    # Device-specific guidance - THIS IS THE KEY FIX
     if detected_device and device_function:
         next_steps.append(
             f"Show how {detected_device.title()} functions: {device_function}"
         )
     
-    sm2_next = ". ".join(next_steps) + "." if next_steps else "Build more distinct insights across all three dimensions."
+    sm2_next = ". ".join(next_steps) + "." if next_steps else "Build more distinct insights."
     
     return {'sm2': sm2, 'sm2_next': sm2_next}
 
 
-def _generate_sm3_feedback(
-    components: TVODEComponents, 
-    text: str,
-    grammar_error_count: Optional[int] = None,
-    grammar_errors: Optional[List[str]] = None
-) -> Dict[str, str]:
-    """Generate SM3 (Cohesion Performance) feedback with grammar error bands"""
+def _generate_sm3_feedback(components: TVODEComponents, text: str) -> Dict[str, str]:
+    """Generate SM3 (Cohesion Performance) feedback"""
     
-    # If grammar info not provided, calculate it
-    if grammar_error_count is None or grammar_errors is None:
-        from .scoring import detect_grammar_errors_detailed
-        grammar_error_count, grammar_errors = detect_grammar_errors_detailed(text)
+    from .scoring import detect_grammar_errors
     
     variety = len(components.connector_types)
     total = sum(len(c) for c in components.connector_types.values())
+    errors = detect_grammar_errors(text)
     
     # What's present
     if variety > 0:
@@ -201,17 +168,7 @@ def _generate_sm3_feedback(
     else:
         sm3 = f"You use {total} connectors across {variety} types. "
     
-    # Grammar error band description
-    if grammar_error_count == 0:
-        sm3 += "No grammar errors detected."
-    elif grammar_error_count <= 1:
-        sm3 += f"{grammar_error_count} minor grammar issue detected."
-    elif grammar_error_count <= 3:
-        sm3 += f"{grammar_error_count} grammar errors detected (noticeable but meaning preserved)."
-    elif grammar_error_count <= 5:
-        sm3 += f"{grammar_error_count} grammar errors detected (beginning to disrupt flow)."
-    else:
-        sm3 += f"{grammar_error_count} grammar errors detected (significant clarity problems)."
+    sm3 += f"Approximately {errors} grammar issues detected."
     
     # Next steps
     next_steps = []
@@ -228,19 +185,11 @@ def _generate_sm3_feedback(
         if missing:
             next_steps.append(f"Add connector variety: {', '.join(missing[:2])}")
     
-    # Grammar error band guidance
-    if grammar_error_count >= 6:
-        error_types = list(set(grammar_errors[:3]))
-        next_steps.append(f"Focus on reducing grammar errors, especially: {', '.join(error_types)}")
-    elif grammar_error_count >= 4:
-        error_types = list(set(grammar_errors[:2]))
-        next_steps.append(f"Reduce grammar errors: {', '.join(error_types)}")
-    elif grammar_error_count >= 2:
-        next_steps.append("Minor grammar cleanup needed (check subject-verb agreement, tense consistency)")
-    elif grammar_error_count > 0:
-        next_steps.append("Minor grammar cleanup needed")
+    if errors > 2:
+        next_steps.append("Focus on reducing grammar issues, especially subject-verb agreement")
+    elif errors > 0:
+        next_steps.append("Minor grammar cleanup needed (check subject-verb agreement, apostrophes)")
     
-    sm3_next = ". ".join(next_steps) + "." if next_steps else "Good connector variety and grammar!"
+    sm3_next = ". ".join(next_steps) + "." if next_steps else "Good connector variety! Focus on grammar cleanup."
     
     return {'sm3': sm3, 'sm3_next': sm3_next}
-
