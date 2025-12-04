@@ -2,16 +2,26 @@
 """
 TVODE Transcriber - Structured transcription with confidence scoring
 
-VERSION 2.0 - Conservative prompt to prevent hallucinations
+VERSION 3.0 - V3 accuracy improvements with tiered routing
 
 Handles:
-- Image to text conversion using Claude API
+- Image to text conversion using Google Cloud Vision API (with handwriting hint)
+- Paragraph-based extraction for correct reading order
+- Tiered routing based on OCR confidence (Tier1/Tier2/Tier3)
+- Validation checks to prevent hallucinations
 - Uncertainty detection (unclear words, strikethroughs)
 - Confidence scoring
 - Structured JSON output
 
-CRITICAL CHANGE (v2.0):
-- New conservative prompt prevents AI from inferring/guessing unclear text
+CRITICAL CHANGES (v3.0):
+- Handwriting hint (en-t-i0-handwrit) for better OCR accuracy
+- Paragraph structure extraction for correct reading order
+- Tiered routing: Tier1 (≥85% direct), Tier2 (75-85% Claude with validation), Tier3 (<75% manual review)
+- Validation prevents Claude from adding/removing content
+- Programmatic cleanup only (no AI text editing)
+
+PREVIOUS (v2.0):
+- Conservative prompt prevents AI from inferring/guessing unclear text
 - AI must flag uncertain words as [UNCLEAR] instead of fabricating plausible text
 - Explicit "do not use language understanding to fill gaps" rules
 - 95% visual certainty threshold before transcribing

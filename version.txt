@@ -1,0 +1,76 @@
+TVODE Diagnostic Pipeline
+=========================
+
+Current Version: 3.0.0
+Release Date: 2025-12-04
+
+---
+
+VERSION HISTORY
+
+v3.0.0 (2025-12-04) - Transcription Accuracy Overhaul
+-----------------------------------------------------
+CHANGES:
+- Add Google Vision handwriting hint (en-t-i0-handwrit)
+- Use paragraph structure for correct reading order (not spatial)
+- Implement tiered routing based on OCR confidence:
+  * Tier 1 (≥85%): Direct assembly, no Claude editing
+  * Tier 2 (75-85%): Claude joining with validation
+  * Tier 3 (<75%): Flag all for manual review
+- Add validation check to prevent hallucination (word count, new words)
+- Preserve kernel-based name normalization
+
+RESULTS:
+- Desmond: Fragments → Coherent (major improvement)
+- Coden: Garbage → Readable (major improvement)
+- No hallucination detected (validation passed)
+
+KNOWN ISSUES:
+- Strikethrough text still leaks through (future fix)
+
+
+v2.0.0 (2025-12-03) - Google Vision Integration
+-----------------------------------------------
+CHANGES:
+- Replace Claude vision with Google Cloud Vision API for OCR
+- Add kernel context injection for character/term normalization
+- Add --kernel and --ocr-engine CLI arguments
+
+RESULTS:
+- Reduced hallucination (no more "loving family" → "long body")
+- Name normalization working (Jong → Jonas, Samness → Sameness)
+
+ISSUES IDENTIFIED:
+- Claude structuring step still edits/hallucinates
+- Led to V3 overhaul
+
+
+v1.0.0 (2025-11-27) - Initial Release
+-------------------------------------
+FEATURES:
+- Claude-only transcription with vision
+- Multi-page support
+- Uncertainty flagging
+- Sentence-level review
+
+KNOWN ISSUES:
+- Claude hallucination on difficult handwriting
+- "loving family" → "long body" type errors
+
+---
+
+COMPONENTS
+
+Transcriber: v3.0
+Evaluator (Thesis): v2.0
+Evaluator (TVODE): v1.0
+Kernel Format: v4.0
+
+---
+
+CONFIGURATION
+
+OCR Engine: Google Cloud Vision (default)
+Fallback: Claude vision
+Confidence Tiers: 85% / 75%
+Validation: Word count ±10%, no new words >3
